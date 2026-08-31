@@ -1,0 +1,24 @@
+llm-lab/
+│
+├── model/
+│   ├── tokenizer.py
+│   ├── transformer.py
+│   └── config.py
+│
+├── train/
+│   └── train.py
+│
+├── inference/
+│   └── generate.py
+│
+├── harness/
+│   ├── runner.py
+│   ├── tools.py
+│   └── state.py
+│
+├── eval/
+│   └── benchmark.py
+│
+├── data/
+│
+└── checkpoints/
