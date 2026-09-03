@@ -1,5 +1,5 @@
 import torch
-from model.loss import simple_mse_loss
+from model.loss import simple_mse_loss, cross_entropy_loss
 
 def test_perfect_prediction_is_near_zero():
     # batch 1, seq 2, vocab 4 — logits that strongly favor the target
@@ -21,3 +21,15 @@ def test_shape_and_grad():
     assert loss.dim() == 0
     loss.backward()
     assert logits.grad is not None
+
+    from model.loss import cross_entropy_loss
+
+def test_ce_lower_when_correct():
+    logits = torch.tensor([[[10,-10,-10],[-10,10,-10]]], dtype=torch.float32)
+    targets = torch.tensor([[0,1]])
+    assert cross_entropy_loss(logits, targets).item() < 0.1
+
+def test_ce_higher_when_wrong():
+    logits = torch.tensor([[[ -10,10,-10]]], dtype=torch.float32)
+    targets = torch.tensor([[0]])
+    assert cross_entropy_loss(logits, targets).item() > 5.0

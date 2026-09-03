@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Learn by building a small language model from scratch"
 requires-python = ">=3.12"
 dependencies = [
+    "numpy>=2.5.2",
     "torch",
 ]
 
