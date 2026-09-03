@@ -1,0 +1,24 @@
+[project]
+name = "llm-lab"
+version = "0.1.0"
+description = "Learn by building a small language model from scratch"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["model", "train", "inference", "harness", "eval"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
