@@ -154,6 +154,7 @@ def main():
     import json
     tag = f"{args.preset}{'_rope' if args.use_rope else ''}"
     run_name = f"{datetime.datetime.now():%Y%m%d_%H%M}_{tag}_{args.data}"
+    run_stamp = run_name.split("_")[0] + run_name.split("_")[1]
     run_path = os.path.join(args.run_dir, run_name)
     os.makedirs(os.path.join(run_path, "samples"), exist_ok=True)
     log_f = open(os.path.join(run_path, "loss.jsonl"), "w")
@@ -238,7 +239,8 @@ def main():
             print(f"step {step:5d}/{args.steps} loss={loss.item():.4f} "
                   f"avg50={running:.4f}{vstr} lr={lr:.1e}", flush=True)
         if step % 500 == 0 or step == args.steps:
-            ckpt = os.path.join(args.out, f"exp002_{tag}_step{step}.pt")
+            ckpt = os.path.join(
+                args.out, f"exp002_{tag}_{run_stamp}_step{step}.pt")
             saved_cfg = dict(vars(cfg))
             saved_cfg["use_rope"] = args.use_rope
             torch.save({"cfg": saved_cfg, "model": model.state_dict(),
