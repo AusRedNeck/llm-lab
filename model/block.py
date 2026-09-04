@@ -4,12 +4,13 @@ from model.attention import MultiHeadAttention
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embedding_dim: int, num_heads: int):
+    def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False):
         super().__init__()
 
         self.attention = MultiHeadAttention(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
+            use_rope=use_rope,
         )
 
         self.norm1 = nn.LayerNorm(embedding_dim)
@@ -21,10 +22,14 @@ class TransformerBlock(nn.Module):
         )
             
 
-    def forward(self, x):
+    def forward(self, x, return_weights: bool = False):
         # Attention lets each token gather information from
         # the earlier tokens in the sequence.
-        attention_output = self.attention(x)
+        if return_weights:
+            attention_output, weights = self.attention(x, return_weights=True)
+        else:
+            attention_output = self.attention(x)
+            weights = None
 
         # Residual connection preserves the original representation
          # while adding the information produced by attention.
@@ -45,4 +50,6 @@ class TransformerBlock(nn.Module):
         # Normalize again before passing the result to the next block.
         output = self.norm2(output)
 
+        if return_weights:
+            return output, weights
         return output

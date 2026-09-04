@@ -52,9 +52,11 @@ class Transformer(nn.Module):
         embedding_dim: int,
         num_heads: int,
         num_layers: int,
+        use_rope: bool = False,
     ):
         super().__init__()
 
+        self.use_rope = use_rope
         # Convert token IDs into vectors that the Transformer can process.
         self.embedding = InputEmbedding(
             vocab_size=vocab_size,
@@ -69,6 +71,7 @@ class Transformer(nn.Module):
                 TransformerBlock(
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
+                    use_rope=use_rope,
                 )
                 for _ in range(num_layers)
             ]
@@ -99,3 +102,26 @@ class Transformer(nn.Module):
         logits = self.lm_head(x)
 
         return logits
+
+    def forward_with_capture(self, tokens):
+        """Cross-section connector (Phase 1 glass box).
+
+        Normal forward() is untouched. This parallel path returns the
+        same logits PLUS every stage the X-ray view needs:
+        embeddings, per-layer hidden states, per-layer attention weights.
+        The viz layer reads this dict — never model internals directly.
+        """
+        import torch.nn.functional as F
+
+        captures = {"layer_hiddens": [], "layer_attention": []}
+        x = self.embedding(tokens)
+        captures["embeddings"] = x.detach()
+        for block in self.blocks:
+            x, weights = block(x, return_weights=True)
+            captures["layer_hiddens"].append(x.detach())
+            captures["layer_attention"].append(weights.detach())
+        x = self.norm(x)
+        logits = self.lm_head(x)
+        captures["logits"] = logits.detach()
+        captures["probs"] = F.softmax(logits, dim=-1).detach()
+        return logits, captures

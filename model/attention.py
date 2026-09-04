@@ -45,7 +45,8 @@ class CausalSelfAttention(nn.Module):
         return output
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embedding_dim: int, num_heads: int):
+    def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False,
+                 max_seq: int = 2048):
         super().__init__()
 
         # Every head gets an equal-sized slice of the embedding dimension.
@@ -57,6 +58,9 @@ class MultiHeadAttention(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
+        self.use_rope = use_rope
+        if use_rope and self.head_dim % 2 != 0:
+            raise ValueError("RoPE needs even head_dim")
 
         # Each projection produces the full embedding dimension
         # We split that dimension into separate heads in forward().
@@ -66,7 +70,7 @@ class MultiHeadAttention(nn.Module):
 
         self.output = nn.Linear(embedding_dim, embedding_dim)
 
-    def forward(self, x):
+    def forward(self, x, return_weights: bool = False):
         batch_size, sequence_length, _ = x.shape
 
         # Project the input into queries, keys and values.
@@ -86,6 +90,15 @@ class MultiHeadAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+
+        # Exp 003: rotate queries + keys by position. Values stay unrotated
+        # (position belongs in the compatibility score, not the content).
+        if self.use_rope:
+            from model.rope import apply_rope, precompute_freqs
+            cos, sin = precompute_freqs(self.head_dim, sequence_length,
+                                        device=x.device, dtype=torch.float32)
+            q = apply_rope(q, cos, sin)
+            k = apply_rope(k, cos, sin)
 
         # Each head compares every query against every key.
         # [B, H, T, head_dim] @ [B, H, head_dim, T]
@@ -131,4 +144,8 @@ class MultiHeadAttention(nn.Module):
         # Let the model learn how to combine information across heads.
         output = self.output(output)
 
+        if return_weights:
+            # Cross-section connector: expose per-head token-to-token weights
+            # for the X-ray view. Normal forward path unaffected.
+            return output, weights
         return output
