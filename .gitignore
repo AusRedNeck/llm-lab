@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 checkpoints/
 data/
+runs/
 *.pt
 *.bin
 .env
