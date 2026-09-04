@@ -14,11 +14,8 @@ def simple_mse_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor
     return torch.mean((probs - target_one_hot) ** 2)
 
 def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    
-    #Standard language-model loss:
-    #logits [B,T,V] → [B*V, T] shift, targets [B,T] → [B*T] → CE
-    
-    # flatten batch+seq for CE
+    # How surprised was the model? Low = good guess, high = bad guess.
+    # Flatten batch+time so CE sees one big pile of predictions.
     B, T, V = logits.shape
     return F.cross_entropy(
         logits.view(B*T, V),

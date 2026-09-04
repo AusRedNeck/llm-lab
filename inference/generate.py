@@ -35,7 +35,7 @@ def load_model(ckpt_path: str, device: torch.device):
 
 
 def sample_next(logits: torch.Tensor, temp: float, topk: int) -> torch.Tensor:
-    # logits: [V] for the last position
+    # Pick the next byte. temp=0 means greedy, higher means spicier.
     if temp <= 0:
         return torch.argmax(logits, dim=-1, keepdim=True)
     logits = logits / temp

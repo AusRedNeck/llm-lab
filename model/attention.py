@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 class CausalSelfAttention(nn.Module):
+    # Each token looks back at what came before and decides what matters.
     def __init__(self, embedding_dim: int):
         super().__init__()
 

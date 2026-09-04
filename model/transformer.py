@@ -45,6 +45,7 @@ class InputEmbedding(nn.Module):
 
 
 class Transformer(nn.Module):
+    # The whole engine: embeddings in, stack of blocks, back to word scores.
     def __init__(
         self,
         vocab_size: int,

@@ -4,6 +4,7 @@ from model.attention import MultiHeadAttention
 
 
 class TransformerBlock(nn.Module):
+    # One layer of thinking: listen to context, then think on your own.
     def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False):
         super().__init__()
 

@@ -1,8 +1,10 @@
+# Model sizes: pick your fight. Toy proves the wiring, bytes10m learns to talk.
 from dataclasses import dataclass
 
 
 @dataclass
 class ModelConfig:
+    # Knobs that set the size of the engine.
     """Configuration for our small experimental language model."""
     vocab_size: int = 256
     context_length: int = 128
