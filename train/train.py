@@ -3,16 +3,21 @@
 Usage:
     python -m train.train --steps 500 --batch 32 --preset bytes10m
     python -m train.train --steps 5000 --batch 64 --preset bytes10m --data tinystories
+    python -m train.train --steps 5000 --batch 64 --preset bpe2k --data tinystories --tokenizer checkpoints/bpe2k.json --use_rope
 
 Presets:
     toy      = current 4-layer toy (proves the loop works)
     bytes10m = 10M shape, byte-level vocab 256 (train THIS first)
     tiny10m  = 10M shape, GPT-2 BPE vocab 50304 (needs BPE tokenizer, later)
+    bpe2k    = 10M shape, TinyStories BPE vocab ~2109 (the efficiency win)
 
 Data:
     default  = synthetic byte stream (no downloads, proves loss decreases)
     tinystories = TinyStories train split, byte-encoded (real English words,
                  still byte tokens — better signal before you build BPE)
+    + --tokenizer checkpoints/bpe2k.json = BPE-encoded instead of bytes.
+      First run pays a one-time encode (~20min, cached to --tok_cache);
+      later runs load the cache in seconds.
 
 Checkpoints land in checkpoints/exp002_<preset>_step<N>.pt
 """
@@ -29,10 +34,12 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.config import BPE2K_10M, TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
-PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M}
+PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M,
+           "bpe2k": BPE2K_10M}
 
 
 def get_device() -> torch.device:
@@ -75,6 +82,38 @@ def load_tinystories(ctx: int, device, cache="data/TinyStories.txt") -> torch.Te
     )
 
 
+def encode_file_lines(path: str, tok: BPETokenizer, limit: int = 0) -> list[int]:
+    # File -> flat BPE ids, blank lines skipped. limit=0 means the whole file.
+    ids: list[int] = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if limit and i >= limit:
+                break
+            line = line.strip()
+            if line:
+                ids.extend(tok.encode(line))
+    return ids
+
+
+def load_tinystories_bpe(tok: BPETokenizer, device,
+                         cache_txt="data/TinyStories.txt",
+                         cache_pt="data/TinyStories_bpe2k.pt") -> torch.Tensor | None:
+    # Encode once, reuse forever: 2.2GB through pure-Python BPE takes
+    # ~20min, but the int32 cache loads in seconds and is never rewritten.
+    if os.path.exists(cache_pt):
+        print(f"loading BPE cache {cache_pt} ...")
+        return torch.load(cache_pt, map_location="cpu", weights_only=True)
+    if not os.path.exists(cache_txt):
+        print(f"missing {cache_txt}; falling back to synthetic data")
+        return None
+    print(f"encoding {cache_txt} -> {cache_pt} (one-time cost, go make tea) ...")
+    ids = encode_file_lines(cache_txt, tok)
+    print(f"  {len(ids) / 1e6:.1f}M tokens")
+    t = torch.tensor(ids, dtype=torch.int32)
+    torch.save(t, cache_pt)
+    return t
+
+
 def get_batch(source: torch.Tensor | None, batch: int, ctx: int,
               vocab: int, device, pos: list) -> tuple[torch.Tensor, torch.Tensor]:
     if source is None:
@@ -102,6 +141,10 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--data", default="synthetic", choices=["synthetic", "tinystories"])
+    ap.add_argument("--tokenizer", default=None,
+                    help="BPE vocab json (e.g. checkpoints/bpe2k.json). Unset = bytes.")
+    ap.add_argument("--tok_cache", default="data/TinyStories_bpe2k.pt",
+                    help="encoded-id cache; built once, loaded after")
     ap.add_argument("--use_rope", action="store_true",
                     help="Exp 003: rotary positions instead of learned absolute")
     ap.add_argument("--out", default="checkpoints")
@@ -113,6 +156,12 @@ def main():
 
     cfg = PRESETS[args.preset]
     device = get_device()
+    tok = None
+    if args.tokenizer:
+        # File is truth: vocab size follows the tokenizer, not the preset.
+        tok = BPETokenizer.load(args.tokenizer)
+        cfg.vocab_size = len(tok.vocab)
+        print(f"tokenizer={args.tokenizer} vocab={len(tok.vocab)}")
     print(f"preset={args.preset} params~{cfg.num_params() / 1e6:.1f}M "
           f"ctx={cfg.context_length} device={device}")
 
@@ -138,7 +187,13 @@ def main():
     corpus = None
     train_corpus, val_corpus = None, None
     if args.data == "tinystories":
-        corpus = load_tinystories(cfg.context_length, device)
+        if tok is not None:
+            # BPE path: ids, not bytes. Same 99/1 closed-book split.
+            corpus = load_tinystories_bpe(tok, device, cache_pt=args.tok_cache)
+            unit = "tokens"
+        else:
+            corpus = load_tinystories(cfg.context_length, device)
+            unit = "bytes"
         if corpus is None:
             print("TinyStories unavailable, using synthetic.")
         else:
@@ -146,13 +201,16 @@ def main():
             # if train loss drops but val stalls, it's memorizing.
             cut = int(len(corpus) * 0.99)
             train_corpus, val_corpus = corpus[:cut], corpus[cut:]
-            print(f"  train {len(train_corpus) / 1e6:.1f}M bytes / "
-                  f"val {len(val_corpus) / 1e6:.1f}M bytes")
+            print(f"  train {len(train_corpus) / 1e6:.1f}M {unit} / "
+                  f"val {len(val_corpus) / 1e6:.1f}M {unit}")
 
     # Visibility layer: every run gets its own dir with loss.jsonl + samples.
     import datetime
     import json
     tag = f"{args.preset}{'_rope' if args.use_rope else ''}"
+    if tok is not None:
+        # Run dir says which vocab it trained on: bpe2k_rope, not just rope.
+        tag += "_" + os.path.splitext(os.path.basename(args.tokenizer))[0]
     run_name = f"{datetime.datetime.now():%Y%m%d_%H%M}_{tag}_{args.data}"
     run_stamp = run_name.split("_")[0] + run_name.split("_")[1]
     run_path = os.path.join(args.run_dir, run_name)
@@ -183,7 +241,11 @@ def main():
         prompts = ["Once there was a princess", "Lily played with"]
         lines = [f"--- step {step} ---"]
         for p in prompts:
-            ids = list(p.encode("utf-8"))
+            if tok is not None:
+                # BPE ids in, BPE decode out. Same fixed prompts, fair compare.
+                ids = tok.encode(p)
+            else:
+                ids = list(p.encode("utf-8"))
             x = torch.tensor([ids], dtype=torch.long, device=device)
             torch.manual_seed(0)
             with torch.no_grad():
@@ -195,8 +257,11 @@ def main():
                             0, topk.indices, topk.values), dim=-1)
                     nxt = torch.multinomial(probs, 1)
                     x = torch.cat([x, nxt.view(1, 1)], dim=1)
-            text = bytes(b % 256 for b in x[0].tolist()).decode(
-                "utf-8", errors="replace")
+            if tok is not None:
+                text = tok.decode([int(i) for i in x[0].tolist()])
+            else:
+                text = bytes(b % 256 for b in x[0].tolist()).decode(
+                    "utf-8", errors="replace")
             lines += [f"> {p}", text, ""]
         with open(os.path.join(run_path, "samples", f"step{step}.txt"), "w",
                   encoding="utf-8") as f:
@@ -243,6 +308,8 @@ def main():
                 args.out, f"exp002_{tag}_{run_stamp}_step{step}.pt")
             saved_cfg = dict(vars(cfg))
             saved_cfg["use_rope"] = args.use_rope
+            # Generate needs this to speak the same vocab. Bytes runs: None.
+            saved_cfg["tokenizer"] = args.tokenizer
             torch.save({"cfg": saved_cfg, "model": model.state_dict(),
                         "step": step}, ckpt)
             print(f"  saved {ckpt}")

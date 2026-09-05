@@ -57,3 +57,15 @@ TINY_10M_BYTES = ModelConfig(
     num_heads=6,
     dropout=0.0,
 )
+
+# BPE era: same 10M shape, vocab from checkpoints/bpe2k.json (2256).
+# 256 ctx now holds ~4.5x more story than bytes. train.py overrides
+# vocab_size from the file at runtime; this stays as the sane default.
+BPE2K_10M = ModelConfig(
+    vocab_size=2256,
+    context_length=256,
+    embedding_dim=384,
+    num_layers=6,
+    num_heads=6,
+    dropout=0.0,
+)

@@ -3,6 +3,8 @@
 Usage:
     python -m inference.generate --ckpt checkpoints/exp002_bytes10m_step5000.pt
     python -m inference.generate --ckpt <file> --prompt "Once upon a time" --tokens 200 --temp 0.8 --topk 40
+    python -m inference.generate --ckpt <bpe_ckpt> --prompt "Once upon a time" --tokens 200
+    # BPE ckpts remember their tokenizer; --tokenizer overrides when needed.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
 
@@ -54,6 +57,8 @@ def main():
     ap.add_argument("--temp", type=float, default=0.8)
     ap.add_argument("--topk", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--tokenizer", default=None,
+                    help="BPE vocab json. Defaults to the ckpt's own record.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -62,8 +67,14 @@ def main():
     model, c = load_model(args.ckpt, device)
     ctx = c["context_length"]
 
-    # Byte-level: prompt -> raw utf-8 bytes.
-    ids = list(args.prompt.encode("utf-8"))
+    # BPE ckpt in, BPE text out. Bytes ckpts behave exactly as before.
+    tok_path = args.tokenizer or c.get("tokenizer")
+    tok = BPETokenizer.load(tok_path) if tok_path else None
+    if tok is not None:
+        ids = tok.encode(args.prompt)
+    else:
+        # Byte-level: prompt -> raw utf-8 bytes.
+        ids = list(args.prompt.encode("utf-8"))
     x = torch.tensor([ids], dtype=torch.long, device=device)
 
     out = ids[:]
@@ -75,7 +86,10 @@ def main():
             out.append(int(nxt.item()))
             x = torch.cat([x, nxt.view(1, 1)], dim=1)
 
-    text = bytes(b % 256 for b in out).decode("utf-8", errors="replace")
+    if tok is not None:
+        text = tok.decode(out)
+    else:
+        text = bytes(b % 256 for b in out).decode("utf-8", errors="replace")
     print(text)
 
 
