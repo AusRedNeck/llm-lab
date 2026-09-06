@@ -54,10 +54,13 @@ class Transformer(nn.Module):
         num_heads: int,
         num_layers: int,
         use_rope: bool = False,
+        dropout: float = 0.0,
     ):
         super().__init__()
 
         self.use_rope = use_rope
+        # Embedding dropout: same vectors, occasional blind spots in train.
+        self.emb_drop = nn.Dropout(dropout)
         # Convert token IDs into vectors that the Transformer can process.
         self.embedding = InputEmbedding(
             vocab_size=vocab_size,
@@ -73,6 +76,7 @@ class Transformer(nn.Module):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     use_rope=use_rope,
+                    dropout=dropout,
                 )
                 for _ in range(num_layers)
             ]
@@ -90,7 +94,7 @@ class Transformer(nn.Module):
 
     def forward(self, tokens):
         # [B, T] → [B, T, D]
-        x = self.embedding(tokens)
+        x = self.emb_drop(self.embedding(tokens))
 
         # Run the representation through every Transformer block.
         for block in self.blocks:
@@ -115,7 +119,7 @@ class Transformer(nn.Module):
         import torch.nn.functional as F
 
         captures = {"layer_hiddens": [], "layer_attention": []}
-        x = self.embedding(tokens)
+        x = self.emb_drop(self.embedding(tokens))
         captures["embeddings"] = x.detach()
         for block in self.blocks:
             x, weights = block(x, return_weights=True)

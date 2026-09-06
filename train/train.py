@@ -134,6 +134,17 @@ def lr_schedule(step: int, warmup: int, total: int, peak: float) -> float:
     return 0.1 * peak + 0.9 * peak * 0.5 * (1 + math.cos(math.pi * p))
 
 
+def early_stop_update(best: float, val: float, bad: int, patience: int,
+                      min_delta: float = 1e-4) -> tuple[float, int, bool]:
+    # One val check, one decision: better resets, flat burns patience.
+    if patience <= 0:
+        return best, bad, False
+    if val < best - min_delta:
+        return val, 0, False
+    bad += 1
+    return best, bad, bad >= patience
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="bytes10m", choices=list(PRESETS))
@@ -150,11 +161,20 @@ def main():
     ap.add_argument("--out", default="checkpoints")
     ap.add_argument("--val_every", type=int, default=100,
                     help="eval held-out loss every N steps (0 = off)")
+    ap.add_argument("--dropout", type=float, default=None,
+                    help="residual/attn dropout (default: preset cfg value)")
+    ap.add_argument("--patience", type=int, default=0,
+                    help="val checks without improvement before stopping (0 = off)")
+    ap.add_argument("--min_delta", type=float, default=1e-4,
+                    help="val must beat best by this much to reset patience")
     ap.add_argument("--run_dir", default="runs",
                     help="loss.jsonl + samples land here per run")
     args = ap.parse_args()
 
     cfg = PRESETS[args.preset]
+    if args.dropout is not None:
+        # CLI wins: one variable per run, preset stays the control.
+        cfg.dropout = args.dropout
     device = get_device()
     tok = None
     if args.tokenizer:
@@ -173,6 +193,7 @@ def main():
         num_heads=cfg.num_heads,
         num_layers=cfg.num_layers,
         use_rope=args.use_rope,
+        dropout=cfg.dropout,
     ).to(device)
     model.train()
 
@@ -271,6 +292,8 @@ def main():
     pos = [0]
     os.makedirs(args.out, exist_ok=True)
     running = 0.0
+    # Early-stop ledger: best val seen, strikes since, stop flag.
+    best_val, bad_checks = float("inf"), 0
 
     for step in range(1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
@@ -290,9 +313,26 @@ def main():
         opt.step()
 
         # Val check on the held-out tail.
-        val = None
+        val, stop = None, False
         if val_corpus is not None and args.val_every and step % args.val_every == 0:
             val = eval_loss(val_corpus)
+            if args.patience > 0:
+                # New best: snapshot it, reset strikes. Flat: burn patience.
+                improved = val < best_val - args.min_delta
+                best_val, bad_checks, stop = early_stop_update(
+                    best_val, val, bad_checks, args.patience, args.min_delta)
+                if improved:
+                    best_ckpt = os.path.join(
+                        args.out, f"exp002_{tag}_{run_stamp}_best.pt")
+                    saved_best = dict(vars(cfg))
+                    saved_best["use_rope"] = args.use_rope
+                    saved_best["tokenizer"] = args.tokenizer
+                    torch.save({"cfg": saved_best, "model": model.state_dict(),
+                                "step": step, "val": val}, best_ckpt)
+                    print(f"  new best val={val:.4f} -> {best_ckpt}")
+                if stop:
+                    print(f"  early stop: val flat for {args.patience} checks "
+                          f"(best={best_val:.4f} @ step {step})")
 
         running += (loss.item() - running) / min(step, 50)
         log_f.write(json.dumps({"step": step, "train": round(loss.item(), 4),
@@ -314,6 +354,11 @@ def main():
                         "step": step}, ckpt)
             print(f"  saved {ckpt}")
             write_samples(step)
+        if stop:
+            # Patience spent: the keeper is the best ckpt, not this one.
+            log_f.write(json.dumps({"early_stop": True, "step": step,
+                                    "best_val": round(best_val, 4)}) + "\n")
+            break
 
     log_f.close()
     print(f"done. final avg50 loss={running:.4f}  run dir: {run_path}")

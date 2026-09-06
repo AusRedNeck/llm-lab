@@ -5,14 +5,18 @@ from model.attention import MultiHeadAttention
 
 class TransformerBlock(nn.Module):
     # One layer of thinking: listen to context, then think on your own.
-    def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False):
+    def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False,
+                 dropout: float = 0.0):
         super().__init__()
 
         self.attention = MultiHeadAttention(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
             use_rope=use_rope,
+            dropout=dropout,
         )
+        # Residual dropout: same skip connection, noisier training signal.
+        self.resid_drop = nn.Dropout(dropout)
 
         self.norm1 = nn.LayerNorm(embedding_dim)
         self.norm2 = nn.LayerNorm(embedding_dim)
@@ -34,7 +38,7 @@ class TransformerBlock(nn.Module):
 
         # Residual connection preserves the original representation
          # while adding the information produced by attention.
-        output = x + attention_output
+        output = x + self.resid_drop(attention_output)
 
         # Keep the representation numerically well-behaved.
         output = self.norm1(output)
@@ -46,7 +50,7 @@ class TransformerBlock(nn.Module):
 
         # Second residual connection preserves the representation
         # while adding the FFN's learned transformation.
-        output = output + feed_forward_output
+        output = output + self.resid_drop(feed_forward_output)
 
         # Normalize again before passing the result to the next block.
         output = self.norm2(output)

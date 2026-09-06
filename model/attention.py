@@ -47,7 +47,7 @@ class CausalSelfAttention(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False,
-                 max_seq: int = 2048):
+                 max_seq: int = 2048, dropout: float = 0.0):
         super().__init__()
 
         # Every head gets an equal-sized slice of the embedding dimension.
@@ -70,6 +70,8 @@ class MultiHeadAttention(nn.Module):
         self.value = nn.Linear(embedding_dim, embedding_dim)
 
         self.output = nn.Linear(embedding_dim, embedding_dim)
+        # Dropout on the attention weights: forget co-adapted shortcuts.
+        self.attn_drop = nn.Dropout(dropout)
 
     def forward(self, x, return_weights: bool = False):
         batch_size, sequence_length, _ = x.shape
@@ -124,6 +126,8 @@ class MultiHeadAttention(nn.Module):
 
         # Convert scores into probabilities along the key/sequence dimension.
         weights = torch.softmax(scores, dim=-1)
+        # Train-time noise on who to listen to; eval passes through.
+        weights = self.attn_drop(weights)
 
         # Combine value vectors according to the attention weights.
         # [B, H, T, T] @ [B, H, T, head_dim]
