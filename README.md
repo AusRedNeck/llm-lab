@@ -38,24 +38,50 @@ Replaced learned positional embeddings with rotary position embeddings on top of
 Config: same as 002 — vocab 2256, ctx 256, embed 384, 6L, 6H, ~10M params.
 Batch 64, lr 3e-4, TinyStories.
 
+### 004 — BPE Efficiency Win
+Status: DONE
+BPE vs byte-level on same architecture (bpe2k + RoPE, 5k steps):
+
+| Model       | Val NLL/token | Bytes/token | Nats/byte |
+|-------------|---------------|-------------|-----------|
+| bytes rope  | 0.7314        | 1.00        | 0.7314    |
+| bpe2k rope  | 2.1150        | 4.11        | 0.5148    |
+
+~30% less surprise per byte of story. BPE era confirmed.
+
+### 005 — Overfitting Knee (20k steps)
+Status: DONE
+Same bpe2k+rope recipe, 4x the steps. Result: val peaked at 2.086 @ step 4500,
+then climbed monotonically to 2.89 by step 20k. Train kept learning; generalization
+peaked early. Discovered early stopping empirically.
+
 Cross-machine reproducibility confirmed (Sep 5, 2026):
 
-| Run       | Machine | Hardware    | Time (20k steps) | Train Loss | Avg50  | Val Loss |
-|-----------|---------|-------------|-------------------|------------|--------|----------|
-| BPE2K+RoPE | PC    | 4070 Ti     | 31 min            | 0.8717     | 0.9148 | 2.8924   |
-| BPE2K+RoPE | Mac   | MPS         | ~2h 15m           | 0.8934     | 0.9166 | 2.8925   |
+| Machine | Hardware    | Time (20k steps) | Train Loss | Val Loss (best) | Val Loss (20k) |
+|---------|-------------|-------------------|------------|-----------------|----------------|
+| PC      | 4070 Ti     | 31 min            | 0.8717     | 2.0858          | 2.8924         |
+| Mac     | MPS         | ~2h 15m           | 0.8934     | ~2.09           | ~2.89          |
 
 Val loss matches to 4 decimal places across CUDA and MPS. Same overfit curve.
-4.3x speedup on PC vs Mac (31 min vs 2h 15m).
+4.3x speedup on PC vs Mac.
 
-5k-step runs (both machines): early-stopped at step 4900, best val 2.154.
-These are intermediate checkpoints, not final.
+### 006 — Dropout + Early Stopping
+Status: DONE
+Wired `ModelConfig.dropout` (was dead config) + `--patience` / `--min_delta` early stopping.
+Two runs:
 
-Keeper: PC checkpoint stashed to Google Drive (llm-lab keepers folder).
+| Run         | Dropout | Steps | Best Val | Step | Train (final) | Notes |
+|-------------|---------|-------|----------|------|---------------|-------|
+| 20260905_1910 | 0.1   | 5k    | 2.1626   | 4900 | 1.9885        | Short horizon — dropout slightly worse (expected) |
+| 20260913_1007 | 0.1   | 4.9k  | 2.154    | 4900 | 1.8809        | Clean early stop, no overfit |
 
-### 004 — Next
+Verdict: dropout 0.1 trades a tiny bit of peak val (2.15 vs 2.09 no-dropout) for
+flat val curve — no climb back to 2.89. That's exactly what dropout is supposed to do.
+Early stopping fires correctly: patience=5 on val checks without improvement.
+
+### 007 — Next
 TBD. Candidates:
 - BPE vocabulary size sweep (how much does vocab impact loss?)
-- Dropout/regularization (address the train-val gap)
 - Larger dataset or data mix experiments
+- Multi-head attention variants
 - Align with "Build a Large Language Model From Scratch" book chapters
