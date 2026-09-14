@@ -86,5 +86,6 @@ corpus-aware BPE cache. BPE-8k DONE (vocab 8256, 15.5min on Mac).
 Smoke test DONE: single book, 500 steps MPS, loss 7.89->0.03, ckpt saved.
 Cleanse DONE: train/cleanse.py strips *** START/END boilerplate — 1429/1450
 clean, 21 quarantined (14 old-style headers, 6 Australia HTML, 1 headerless).
-BPE-8k retraining on clean corpus now.
-Full crunch: Ronin 4070 Ti (bpe8k.json + LibriSpeech.7z ship via tailscale file cp).
+BPE-8k retrained on clean corpus (vocab 8256, 700s) + shipped to Ronin.
+Full stack confirmed on Ronin: code + corpus + cleanse + vocab.
+Next: 20k-step libri10m crunch on 4070 Ti, then eval bake-off vs TinyStories era.
