@@ -21,7 +21,30 @@ from model.bpe import train_bpe
 
 def load_sample(path: str, max_lines: int, stride: int) -> list[str]:
     # Every Nth line: spans the whole file instead of just the head.
-    texts: list[str] = []
+    # Dir support: round-robin across .txt files (LibriSpeech-style trees)
+    # so the sample covers many books, not just the first one.
+    import glob
+    if os.path.isdir(path):
+        files = sorted(glob.glob(os.path.join(path, "**", "*.txt"),
+                                 recursive=True))
+        if not files:
+            raise FileNotFoundError(f"no .txt files under {path}")
+        texts: list[str] = []
+        # Stride per file, cycle files until quota met (diversity first).
+        per_file_stride = max(1, stride // max(1, len(files) // 10))
+        for fp in files:
+            if len(texts) >= max_lines:
+                break
+            with open(fp, encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if len(texts) >= max_lines:
+                        break
+                    if i % per_file_stride == 0:
+                        line = line.strip()
+                        if line:
+                            texts.append(line)
+        return texts
+    texts = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for i, line in enumerate(f):
             if i % stride == 0:

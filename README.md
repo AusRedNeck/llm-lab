@@ -79,9 +79,8 @@ Verdict: dropout 0.1 trades a tiny bit of peak val (2.15 vs 2.09 no-dropout) for
 flat val curve — no climb back to 2.89. That's exactly what dropout is supposed to do.
 Early stopping fires correctly: patience=5 on val checks without improvement.
 
-### 007 — Next
-TBD. Candidates:
-- BPE vocabulary size sweep (how much does vocab impact loss?)
-- Larger dataset or data mix experiments
-- Multi-head attention variants
-- Align with "Build a Large Language Model From Scratch" book chapters
+### 007 — Book Era (LibriSpeech)
+Status: IN PROGRESS
+Generic `--corpus` (file or dir), `libri10m` preset (ctx 512), `--resume`,
+corpus-aware BPE cache. BPE-8k training on 1450 Gutenberg books.
+Smoke test: single book, 500 steps, Mac MPS. Full crunch: Ronin 4070 Ti.

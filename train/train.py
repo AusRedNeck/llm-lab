@@ -4,6 +4,7 @@ Usage:
     python -m train.train --steps 500 --batch 32 --preset bytes10m
     python -m train.train --steps 5000 --batch 64 --preset bytes10m --data tinystories
     python -m train.train --steps 5000 --batch 64 --preset bpe2k --data tinystories --tokenizer checkpoints/bpe2k.json --use_rope
+    python -m train.train --steps 5000 --batch 64 --preset bpe2k --corpus data/librivox --tokenizer checkpoints/bpe8k.json --use_rope
 
 Presets:
     toy      = current 4-layer toy (proves the loop works)
@@ -34,12 +35,12 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import BPE2K_10M, TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.config import BPE2K_10M, LIBRI_10M, TINY_10M, TINY_10M_BYTES, TOY_1M
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
 PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M,
-           "bpe2k": BPE2K_10M}
+           "bpe2k": BPE2K_10M, "libri10m": LIBRI_10M}
 
 
 def get_device() -> torch.device:
@@ -58,6 +59,83 @@ def synthetic_batch(batch: int, ctx: int, vocab: int, device) -> torch.Tensor:
     # A working transformer should beat chance on this.
     data[:, 16::16] = data[:, 8:-7:16]
     return data
+
+
+def resolve_corpus_files(corpus_path: str) -> list[str]:
+    # --corpus accepts a .txt file or a dir of .txt files (book chapters).
+    # Dirs sort for determinism; nested dirs included for LibriVox-style trees.
+    import glob
+    if os.path.isfile(corpus_path):
+        return [corpus_path]
+    if os.path.isdir(corpus_path):
+        files = sorted(glob.glob(os.path.join(corpus_path, "**", "*.txt"),
+                                 recursive=True))
+        if not files:
+            raise FileNotFoundError(f"no .txt files under {corpus_path}")
+        return files
+    raise FileNotFoundError(f"corpus not found: {corpus_path}")
+
+
+def load_bytes_corpus(files: list[str]) -> torch.Tensor:
+    # Raw utf-8 bytes concatenated — any text file or dir works.
+    import numpy as _np
+    parts = []
+    for path in files:
+        with open(path, "rb") as f:
+            raw = f.read()
+        print(f"  {path}: {len(raw) / 1e6:.1f}M bytes")
+        parts.append(_np.frombuffer(raw, dtype="uint8").copy())
+    return torch.from_numpy(_np.concatenate(parts))
+
+
+def load_bpe_corpus(tok: BPETokenizer, files: list[str],
+                    cache_pt: str) -> torch.Tensor:
+    # Encode once, reuse forever. Cache key includes corpus+vocab names
+    # so TinyStories_bpe2k.pt and librivox_bpe8k.pt never collide.
+    if os.path.exists(cache_pt):
+        print(f"loading BPE cache {cache_pt} ...")
+        return torch.load(cache_pt, map_location="cpu", weights_only=True)
+    print(f"encoding {len(files)} file(s) -> {cache_pt} (one-time cost) ...")
+    ids: list[int] = []
+    for path in files:
+        ids.extend(encode_file_lines(path, tok))
+    print(f"  {len(ids) / 1e6:.1f}M tokens")
+    t = torch.tensor(ids, dtype=torch.int32)
+    os.makedirs(os.path.dirname(cache_pt) or ".", exist_ok=True)
+    torch.save(t, cache_pt)
+    return t
+
+
+def default_bpe_cache(corpus_files: list[str], tok_path: str) -> str:
+    # data/<corpus-stem>_<tok-stem>.pt — e.g. data/librivox_bpe8k.pt.
+    # Single file: stem of the file. Dir: stem of the dir.
+    first = corpus_files[0]
+    if len(corpus_files) == 1:
+        corpus_stem = os.path.splitext(os.path.basename(first))[0]
+    else:
+        # common dir name, e.g. data/librivox/*.txt -> librivox
+        corpus_stem = os.path.basename(os.path.dirname(os.path.commonprefix(corpus_files)))
+        if not corpus_stem:
+            corpus_stem = "mixed"
+    tok_stem = os.path.splitext(os.path.basename(tok_path))[0]
+    return os.path.join("data", f"{corpus_stem}_{tok_stem}.pt")
+
+
+def split_corpus(corpus: torch.Tensor, val_frac: float,
+                 ctx: int) -> tuple[torch.Tensor, torch.Tensor | None]:
+    # Closed-book tail split. A val tail shorter than one window can't
+    # even fill a batch — val goes off with a warning instead of a
+    # cryptic randint crash deep in the loop.
+    cut = int(len(corpus) * (1.0 - val_frac))
+    train, val = corpus[:cut], corpus[cut:]
+    if len(val) < ctx + 1:
+        print(f"  val tail too small ({len(val)} < ctx+1={ctx + 1}) — val off")
+        val = None
+    if len(train) < ctx + 1:
+        raise SystemExit(
+            f"train corpus too small ({len(train)} < ctx+1={ctx + 1}) — "
+            f"need a bigger --corpus for ctx={ctx}")
+    return train, val
 
 
 def load_tinystories(ctx: int, device, cache="data/TinyStories.txt") -> torch.Tensor | None:
@@ -152,10 +230,14 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--data", default="synthetic", choices=["synthetic", "tinystories"])
+    ap.add_argument("--corpus", default=None,
+                    help="generic corpus: .txt file or dir of .txt files (e.g. data/librivox). Overrides --data when set.")
     ap.add_argument("--tokenizer", default=None,
                     help="BPE vocab json (e.g. checkpoints/bpe2k.json). Unset = bytes.")
-    ap.add_argument("--tok_cache", default="data/TinyStories_bpe2k.pt",
-                    help="encoded-id cache; built once, loaded after")
+    ap.add_argument("--tok_cache", default=None,
+                    help="encoded-id cache; built once, loaded after (default: data/<corpus>_<tok>.pt)")
+    ap.add_argument("--val_frac", type=float, default=0.01,
+                    help="held-out tail fraction for closed-book val (default 0.01)")
     ap.add_argument("--use_rope", action="store_true",
                     help="Exp 003: rotary positions instead of learned absolute")
     ap.add_argument("--out", default="checkpoints")
@@ -169,6 +251,8 @@ def main():
                     help="val must beat best by this much to reset patience")
     ap.add_argument("--run_dir", default="runs",
                     help="loss.jsonl + samples land here per run")
+    ap.add_argument("--resume", default=None,
+                    help="checkpoint .pt to resume from (model + optimizer restored, steps continue to --steps)")
     args = ap.parse_args()
 
     cfg = PRESETS[args.preset]
@@ -205,12 +289,51 @@ def main():
                             weight_decay=0.1)
     warmup = min(200, args.steps // 10)
 
+    # Resume: weights + optimizer back, step counter continues to --steps.
+    # Shape mismatch (e.g. ctx/vocab change) fails loud, not silent.
+    start_step = 0
+    if args.resume:
+        r = torch.load(args.resume, map_location=device, weights_only=False)
+        rc = r["cfg"]
+        for k in ("vocab_size", "context_length", "embedding_dim",
+                  "num_layers", "num_heads"):
+            if rc.get(k) != getattr(cfg, k):
+                raise ValueError(
+                    f"resume mismatch: ckpt {k}={rc.get(k)} vs cfg {k}={getattr(cfg, k)} "
+                    f"(use the same --preset/--tokenizer as the original run)")
+        model.load_state_dict(r["model"])
+        if "optimizer" in r:
+            opt.load_state_dict(r["optimizer"])
+        start_step = int(r.get("step", 0))
+        print(f"resumed {args.resume} @ step {start_step}")
+
     corpus = None
     train_corpus, val_corpus = None, None
-    if args.data == "tinystories":
+    corpus_label = args.data
+    if args.corpus:
+        # Generic path: any file or dir. Same closed-book tail split.
+        files = resolve_corpus_files(args.corpus)
+        corpus_label = os.path.splitext(os.path.basename(
+            args.corpus.rstrip("/")))[0] if os.path.isfile(args.corpus) \
+            else os.path.basename(os.path.normpath(args.corpus))
+        print(f"corpus={args.corpus} ({len(files)} file(s))")
+        if tok is not None:
+            cache_pt = args.tok_cache or default_bpe_cache(files, args.tokenizer)
+            corpus = load_bpe_corpus(tok, files, cache_pt)
+            unit = "tokens"
+        else:
+            corpus = load_bytes_corpus(files)
+            unit = "bytes"
+        train_corpus, val_corpus = split_corpus(corpus, args.val_frac,
+                                               cfg.context_length)
+        print(f"  train {len(train_corpus) / 1e6:.1f}M {unit} / "
+              f"val {len(val_corpus) / 1e6:.1f}M {unit}" if val_corpus is not None
+              else f"  train {len(train_corpus) / 1e6:.1f}M {unit} / val off")
+    elif args.data == "tinystories":
         if tok is not None:
             # BPE path: ids, not bytes. Same 99/1 closed-book split.
-            corpus = load_tinystories_bpe(tok, device, cache_pt=args.tok_cache)
+            cache_pt = args.tok_cache or "data/TinyStories_bpe2k.pt"
+            corpus = load_tinystories_bpe(tok, device, cache_pt=cache_pt)
             unit = "tokens"
         else:
             corpus = load_tinystories(cfg.context_length, device)
@@ -218,12 +341,13 @@ def main():
         if corpus is None:
             print("TinyStories unavailable, using synthetic.")
         else:
-            # Exp 002b: closed-book exam. Last 1% is never trained on —
+            # Exp 002b: closed-book exam. Last tail is never trained on —
             # if train loss drops but val stalls, it's memorizing.
-            cut = int(len(corpus) * 0.99)
-            train_corpus, val_corpus = corpus[:cut], corpus[cut:]
+            train_corpus, val_corpus = split_corpus(corpus, args.val_frac,
+                                                   cfg.context_length)
             print(f"  train {len(train_corpus) / 1e6:.1f}M {unit} / "
-                  f"val {len(val_corpus) / 1e6:.1f}M {unit}")
+                  f"val {len(val_corpus) / 1e6:.1f}M {unit}" if val_corpus is not None
+                  else f"  train {len(train_corpus) / 1e6:.1f}M {unit} / val off")
 
     # Visibility layer: every run gets its own dir with loss.jsonl + samples.
     import datetime
@@ -232,7 +356,7 @@ def main():
     if tok is not None:
         # Run dir says which vocab it trained on: bpe2k_rope, not just rope.
         tag += "_" + os.path.splitext(os.path.basename(args.tokenizer))[0]
-    run_name = f"{datetime.datetime.now():%Y%m%d_%H%M}_{tag}_{args.data}"
+    run_name = f"{datetime.datetime.now():%Y%m%d_%H%M}_{tag}_{corpus_label}"
     run_stamp = run_name.split("_")[0] + run_name.split("_")[1]
     run_path = os.path.join(args.run_dir, run_name)
     os.makedirs(os.path.join(run_path, "samples"), exist_ok=True)
@@ -295,7 +419,7 @@ def main():
     # Early-stop ledger: best val seen, strikes since, stop flag.
     best_val, bad_checks = float("inf"), 0
 
-    for step in range(1, args.steps + 1):
+    for step in range(start_step + 1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
         for g in opt.param_groups:
             g["lr"] = lr
@@ -327,7 +451,9 @@ def main():
                     saved_best = dict(vars(cfg))
                     saved_best["use_rope"] = args.use_rope
                     saved_best["tokenizer"] = args.tokenizer
+                    saved_best["corpus"] = args.corpus or args.data
                     torch.save({"cfg": saved_best, "model": model.state_dict(),
+                                "optimizer": opt.state_dict(),
                                 "step": step, "val": val}, best_ckpt)
                     print(f"  new best val={val:.4f} -> {best_ckpt}")
                 if stop:
@@ -350,7 +476,9 @@ def main():
             saved_cfg["use_rope"] = args.use_rope
             # Generate needs this to speak the same vocab. Bytes runs: None.
             saved_cfg["tokenizer"] = args.tokenizer
+            saved_cfg["corpus"] = args.corpus or args.data
             torch.save({"cfg": saved_cfg, "model": model.state_dict(),
+                        "optimizer": opt.state_dict(),
                         "step": step}, ckpt)
             print(f"  saved {ckpt}")
             write_samples(step)

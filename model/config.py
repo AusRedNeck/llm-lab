@@ -69,3 +69,15 @@ BPE2K_10M = ModelConfig(
     num_heads=6,
     dropout=0.0,
 )
+
+# Book era: 512 ctx for chapter-length dependencies (LibriSpeech books).
+# Vocab overridden from the tokenizer file at runtime (bpe8k -> ~8256).
+# Positional table doubles vs 256 ctx — negligible param delta (~0.1M).
+LIBRI_10M = ModelConfig(
+    vocab_size=8256,
+    context_length=512,
+    embedding_dim=384,
+    num_layers=6,
+    num_heads=6,
+    dropout=0.1,
+)
