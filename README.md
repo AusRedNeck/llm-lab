@@ -84,4 +84,7 @@ Status: IN PROGRESS
 Generic `--corpus` (file or dir), `libri10m` preset (ctx 512), `--resume`,
 corpus-aware BPE cache. BPE-8k DONE (vocab 8256, 15.5min on Mac).
 Smoke test DONE: single book, 500 steps MPS, loss 7.89->0.03, ckpt saved.
-Full crunch: Ronin 4070 Ti (bpe8k.json ships via tailscale file cp).
+Cleanse DONE: train/cleanse.py strips *** START/END boilerplate — 1429/1450
+clean, 21 quarantined (14 old-style headers, 6 Australia HTML, 1 headerless).
+BPE-8k retraining on clean corpus now.
+Full crunch: Ronin 4070 Ti (bpe8k.json + LibriSpeech.7z ship via tailscale file cp).

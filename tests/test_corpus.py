@@ -1,6 +1,35 @@
 import torch
 
+from train.cleanse import cleanse_text
 from train.train import resolve_corpus_files, split_corpus
+
+
+def test_cleanse_markers():
+    # Boilerplate out, story stays, END marker cuts the tail.
+    raw = ("Title page junk\n"
+           "*** START OF THIS PROJECT GUTENBERG EBOOK TEST ***\n"
+           "Once upon a time.\n"
+           "*** END OF THIS PROJECT GUTENBERG EBOOK TEST ***\n"
+           "License legalese.\n")
+    body, status = cleanse_text(raw)
+    assert status == "ok"
+    assert body == "Once upon a time.\n"
+
+
+def test_cleanse_nospace_variant():
+    # "***START OF" without the space still matches.
+    raw = ("junk\n***START OF THE PROJECT GUTENBERG EBOOK X,\nbody here\n")
+    body, status = cleanse_text(raw)
+    assert status == "ok"
+    assert "junk" not in body and "body here" in body
+
+
+def test_cleanse_quarantine():
+    # No markers, old-style, australia: returned untouched + flagged.
+    _, s1 = cleanse_text("Project Gutenberg Etext of Foo\nbody\n")
+    _, s2 = cleanse_text("<table><a href=\"http://gutenberg.net.au\">x</a></table>\nbody\n")
+    _, s3 = cleanse_text("Just a story, no headers at all.\n")
+    assert (s1, s2, s3) == ("oldstyle", "australia", "no_markers")
 
 
 def test_split_corpus_normal():
