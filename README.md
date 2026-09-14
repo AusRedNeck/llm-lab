@@ -13,6 +13,17 @@ Principles
 - Reproduce experiments across machines.
 - Record what changed and what happened.
 
+Setup
+-----
+After git pull, run:
+
+    bash setup.sh
+
+This creates the venv, syncs deps, and installs CUDA torch on Windows.
+Mac just needs `uv sync` (setup.sh handles both).
+
+To verify CUDA: `uv run python -c "import torch; print(torch.cuda.is_available())"`
+
 Machines
 --------
 - PC (Ronin, 4070 Ti Super)  — primary dev/training (CUDA)
