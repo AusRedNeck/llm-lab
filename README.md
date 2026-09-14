@@ -98,3 +98,21 @@ Result: early stop @ step 6800, best val 4.84, train 9.18→3.72.
 Verdict: pipeline works end-to-end on real literature (193M tokens). Val 4.84 vs
 TinyStories 2.15 is expected — books are a much harder corpus. Train/val gap
 (3.72/4.84) says capacity wall, not broken code. Next: go bigger (008).
+
+### 008 — TinyStories 50M Control
+Status: DONE (Sep 14, 2026 — Ronin 4070 Ti)
+Config: bpe50m preset — vocab 2256 (bpe2k), ctx 256, embed 640, 10L10H,
+dropout 0.1, ~52M params. 20k-step budget, full run.
+Result: step 20000, train 0.003, val 5.89.
+Verdict: massive overfit — model memorized TinyStories completely but didn't
+generalize (val 5.89). 50M is too much model for TinyStories. Dropout kept it
+from collapsing but can't prevent memorization on a small, simple corpus.
+This run confirms 50M architecture is functional on CUDA. The real test is
+Gutenberg (009) where data volume matches the capacity.
+
+### 009 — Gutenberg 50M (LibriSpeech)
+Status: QUEUED
+Config: libri50m preset — vocab 8256 (bpe8k), ctx 512, embed 640, 10L10H,
+dropout 0.1, ~52M params. 193M tokens from Gutenberg books.
+Hypothesis: 50M should generalize better on 193M tokens than TinyStories —
+more data matches more capacity. Val should land below 4.84 (007's 10M result).
