@@ -35,12 +35,14 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import BPE2K_10M, LIBRI_10M, TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.config import BPE2K_10M, BPE2K_50M, LIBRI_10M, LIBRI_50M, TINY_10M, TINY_10M_BYTES, TOY_1M
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
 PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M,
-           "bpe2k": BPE2K_10M, "libri10m": LIBRI_10M}
+           "bpe2k": BPE2K_10M, "libri10m": LIBRI_10M,
+           "bpe50m": BPE2K_50M, "libri50m": LIBRI_50M}
+
 
 
 def get_device() -> torch.device:

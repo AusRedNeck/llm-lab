@@ -79,13 +79,11 @@ Verdict: dropout 0.1 trades a tiny bit of peak val (2.15 vs 2.09 no-dropout) for
 flat val curve — no climb back to 2.89. That's exactly what dropout is supposed to do.
 Early stopping fires correctly: patience=5 on val checks without improvement.
 
-### 007 — Book Era (LibriSpeech)
-Status: IN PROGRESS
-Generic `--corpus` (file or dir), `libri10m` preset (ctx 512), `--resume`,
-corpus-aware BPE cache. BPE-8k DONE (vocab 8256, 15.5min on Mac).
-Smoke test DONE: single book, 500 steps MPS, loss 7.89->0.03, ckpt saved.
-Cleanse DONE: train/cleanse.py strips *** START/END boilerplate — 1429/1450
-clean, 21 quarantined (14 old-style headers, 6 Australia HTML, 1 headerless).
-BPE-8k retrained on clean corpus (vocab 8256, 700s) + shipped to Ronin.
-Full stack confirmed on Ronin: code + corpus + cleanse + vocab.
-Next: 20k-step libri10m crunch on 4070 Ti, then eval bake-off vs TinyStories era.
+### 007 — Book Era First Crunch (LibriSpeech)
+Status: DONE (Sep 14, 2026 — Ronin 4070 Ti)
+Config: libri10m preset — vocab 8256 (bpe8k clean), ctx 512, embed 384, 6L6H,
+dropout 0.1, ~10M params. 20k-step budget, early stopped.
+Result: early stop @ step 6800, best val 4.84, train 9.18→3.72.
+Verdict: pipeline works end-to-end on real literature (193M tokens). Val 4.84 vs
+TinyStories 2.15 is expected — books are a much harder corpus. Train/val gap
+(3.72/4.84) says capacity wall, not broken code. Next: go bigger (008).

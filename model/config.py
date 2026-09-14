@@ -81,3 +81,24 @@ LIBRI_10M = ModelConfig(
     num_heads=6,
     dropout=0.1,
 )
+
+# 50M class: same shape, vocab/ctx follow the corpus (like the 10M era).
+# d=640/10H = 64/head — clean attention math.
+BPE2K_50M = ModelConfig(
+    vocab_size=2256,      # overridden from bpe2k file at runtime
+    context_length=256,   # stories are short — 256 holds plenty
+    embedding_dim=640,
+    num_layers=10,
+    num_heads=10,
+    dropout=0.1,          # keep — it earned its place in 006
+)
+
+LIBRI_50M = ModelConfig(
+    vocab_size=8256,      # overridden from bpe8k file at runtime
+    context_length=512,   # books need the longer view
+    embedding_dim=640,
+    num_layers=10,
+    num_heads=10,
+    dropout=0.1,
+)
+
