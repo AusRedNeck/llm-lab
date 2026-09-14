@@ -82,5 +82,6 @@ Early stopping fires correctly: patience=5 on val checks without improvement.
 ### 007 — Book Era (LibriSpeech)
 Status: IN PROGRESS
 Generic `--corpus` (file or dir), `libri10m` preset (ctx 512), `--resume`,
-corpus-aware BPE cache. BPE-8k training on 1450 Gutenberg books.
-Smoke test: single book, 500 steps, Mac MPS. Full crunch: Ronin 4070 Ti.
+corpus-aware BPE cache. BPE-8k DONE (vocab 8256, 15.5min on Mac).
+Smoke test DONE: single book, 500 steps MPS, loss 7.89->0.03, ckpt saved.
+Full crunch: Ronin 4070 Ti (bpe8k.json ships via tailscale file cp).
