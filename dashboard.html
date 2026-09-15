@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>LLM Training Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { background: #16213e; border-radius: 12px; padding: 16px; border: 1px solid #0f3460; }
+  .card h3 { color: #e94560; font-size: 14px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+  .stat { font-size: 32px; font-weight: bold; color: #fff; }
+  .stat small { font-size: 14px; color: #888; }
+  .chart-wrap { height: 300px; }
+  .full { grid-column: 1 / -1; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; }
+  .tag-green { background: #2ecc7133; color: #2ecc71; }
+  .tag-yellow { background: #f39c1233; color: #f39c12; }
+  .tag-red { background: #e74c3c33; color: #e74c3c; }
+</style>
+</head>
+<body>
+<h2 style="margin-bottom:16px; color:#e94560">🧬 LLM Lab Training Dashboard</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Current Run: 50M (10/10)</h3>
+    <div class="stat" id="current-step">—</div>
+    <small id="current-detail">Loading...</small>
+  </div>
+  <div class="card">
+    <h3>GPU</h3>
+    <div class="stat" id="gpu-mem">—</div>
+    <small>RTX 4070 Ti SUPER • 99% util</small>
+  </div>
+  <div class="card full">
+    <h3>Loss Curves <span class="tag tag-green">LIVE</span></h3>
+    <div class="chart-wrap"><canvas id="lossChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>10M Model (completed)</h3>
+    <div class="stat">7.7217</div>
+    <small>Floor at step 200 • capacity limited</small>
+  </div>
+  <div class="card">
+    <h3>50M Model (running)</h3>
+    <div class="stat" id="best-loss">—</div>
+    <small id="best-detail">Tracking...</small>
+  </div>
+</div>
+
+<script>
+const ctx = document.getElementById('lossChart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    datasets: [
+      { label: '50M Train', data: [], borderColor: '#e94560', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+      { label: '50M Avg50', data: [], borderColor: '#e9456088', borderWidth: 1, pointRadius: 0, borderDash: [5,5], tension: 0.3 },
+      { label: '10M Baseline', data: [], borderColor: '#555', borderWidth: 1, pointRadius: 0, borderDash: [3,3], tension: 0.3 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    scales: {
+      x: { type: 'linear', title: { display: true, text: 'Step', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#ffffff11' } },
+      y: { title: { display: true, text: 'Loss', color: '#888' }, ticks: { color: '#888' }, grid: { color: '#ffffff11' }, min: 5, max: 10 }
+    },
+    plugins: { legend: { labels: { color: '#ccc' } } }
+  }
+});
+
+// 10M baseline (flat line at 7.72)
+chart.data.datasets[2].data = [{x:0,y:9.2},{x:200,y:7.74},{x:5000,y:7.72}];
+chart.update('none');
+
+let lastStep = 0;
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/loss');
+    const data = await r.json();
+    
+    if (data.step > lastStep) {
+      lastStep = data.step;
+      
+      // Update stats
+      document.getElementById('current-step').innerHTML = `Step ${data.step} / 5000`;
+      document.getElementById('current-detail').textContent = `Train: ${data.train.toFixed(4)} • Avg50: ${data.avg50.toFixed(4)} • LR: ${data.lr.toExponential(2)}`;
+      
+      chart.data.datasets[0].data.push({x: data.step, y: data.train});
+      chart.data.datasets[1].data.push({x: data.step, y: data.avg50});
+      chart.data.datasets[0].label = `50M Train (latest: ${data.train.toFixed(3)})`;
+      chart.update('none');
+      
+      // Track best
+      const bestEl = document.getElementById('best-loss');
+      const bestDetail = document.getElementById('best-detail');
+      if (!bestEl.dataset.best || data.avg50 < parseFloat(bestEl.dataset.best)) {
+        bestEl.dataset.best = data.avg50;
+        bestEl.textContent = data.avg50.toFixed(4);
+        bestDetail.textContent = `at step ${data.step}`;
+      }
+    }
+  } catch(e) {}
+}
+
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
