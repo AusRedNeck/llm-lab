@@ -35,13 +35,15 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import BPE2K_10M, BPE2K_50M, LIBRI_10M, LIBRI_50M, TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.config import BPE2K_10M, BPE2K_50M, DENSE_194M, DENSE_111M, LIBRI_10M, LIBRI_50M, TINY_10M, TINY_10M_BYTES, TOY_1M
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
 PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M,
            "bpe2k": BPE2K_10M, "libri10m": LIBRI_10M,
-           "bpe50m": BPE2K_50M, "libri50m": LIBRI_50M}
+           "bpe50m": BPE2K_50M, "libri50m": LIBRI_50M,
+           "dense194m": DENSE_194M,
+           "dense111m": DENSE_111M}
 
 
 
@@ -253,6 +255,8 @@ def main():
                     help="val must beat best by this much to reset patience")
     ap.add_argument("--run_dir", default="runs",
                     help="loss.jsonl + samples land here per run")
+    ap.add_argument("--accum", type=int, default=1,
+                    help="gradient accumulation steps: effective batch = batch * accum")
     ap.add_argument("--resume", default=None,
                     help="checkpoint .pt to resume from (model + optimizer restored, steps continue to --steps)")
     args = ap.parse_args()
@@ -368,6 +372,15 @@ def main():
     log_f.write("\n")
     print(f"  run dir: {run_path}")
 
+    # AMP: mixed-precision forward (fp16/bf16) + fp32 gradients.
+    # Free speedup on CUDA — ~1.5-2x throughput, negligible quality impact.
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    autocast_dtype = torch.bfloat16 if use_amp and torch.cuda.is_bf16_supported() else torch.float16
+    accum = args.accum
+    if accum > 1:
+        print(f"  gradient accumulation: {accum} micro-batches, effective batch = {args.batch * accum}")
+
     @torch.no_grad()
     def eval_loss(data, batches: int = 10) -> float:
         model.eval()
@@ -375,8 +388,9 @@ def main():
         for _ in range(batches):
             x, y = get_batch(data, args.batch, cfg.context_length,
                              cfg.vocab_size, device, pos)
-            total += F.cross_entropy(
-                model(x).reshape(-1, cfg.vocab_size), y.reshape(-1)).item()
+            with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                total += F.cross_entropy(
+                    model(x).reshape(-1, cfg.vocab_size), y.reshape(-1)).item()
         model.train()
         return total / batches
 
@@ -427,16 +441,25 @@ def main():
             g["lr"] = lr
 
         # Train split only — val split is never trained on.
+        # Gradient accumulation: accumulate over N micro-batches, step once.
+        # Loss is scaled by 1/accum so the gradient magnitude is correct.
         src = train_corpus if train_corpus is not None else corpus
-        x, y = get_batch(src, args.batch, cfg.context_length,
-                         cfg.vocab_size, device, pos)
-        logits = model(x)
-        loss = F.cross_entropy(logits.reshape(-1, cfg.vocab_size), y.reshape(-1))
-
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        micro_loss = 0.0
+        for micro in range(accum):
+            x, y = get_batch(src, args.batch, cfg.context_length,
+                             cfg.vocab_size, device, pos)
+            with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                logits = model(x)
+                loss = F.cross_entropy(logits.reshape(-1, cfg.vocab_size), y.reshape(-1)) / accum
+            scaler.scale(loss).backward()
+            micro_loss += loss.item()
+
+        scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        opt.step()
+        scaler.step(opt)
+        scaler.update()
+        loss_val = micro_loss  # accumulated loss (already scaled by 1/accum)
 
         # Val check on the held-out tail.
         val, stop = None, False
@@ -462,14 +485,14 @@ def main():
                     print(f"  early stop: val flat for {args.patience} checks "
                           f"(best={best_val:.4f} @ step {step})")
 
-        running += (loss.item() - running) / min(step, 50)
-        log_f.write(json.dumps({"step": step, "train": round(loss.item(), 4),
+        running += (loss_val - running) / min(step, 50)
+        log_f.write(json.dumps({"step": step, "train": round(loss_val, 4),
                                 "avg50": round(running, 4),
                                 "val": round(val, 4) if val else None,
                                 "lr": lr}) + "\n")
         if step % 25 == 0 or step == 1:
             vstr = f" val={val:.4f}" if val else ""
-            print(f"step {step:5d}/{args.steps} loss={loss.item():.4f} "
+            print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
                   f"avg50={running:.4f}{vstr} lr={lr:.1e}", flush=True)
         if step % 500 == 0 or step == args.steps:
             ckpt = os.path.join(

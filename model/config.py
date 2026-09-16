@@ -102,3 +102,26 @@ LIBRI_50M = ModelConfig(
     dropout=0.1,
 )
 
+# Dense 194M: 3× current 50M. 32 attention heads, d=1024.
+# The "does bigger actually help on FineWeb?" test.
+# ~4-5GB VRAM on 4070 Ti, ~3× slower than 50M.
+DENSE_194M = ModelConfig(
+    vocab_size=8256,      # overridden from bpe8k file at runtime
+    context_length=512,
+    embedding_dim=1024,
+    num_layers=14,
+    num_heads=32,         # 32 dims per head, clean
+    dropout=0.1,
+)
+
+# 24-head variant: 768d / 24H (32 dims/head, same as 194M's head_dim).
+# ~111M params — fits batch 16 on 16GB where 194M doesn't.
+DENSE_111M = ModelConfig(
+    vocab_size=8256,      # overridden from bpe8k file at runtime
+    context_length=512,
+    embedding_dim=768,
+    num_layers=14,
+    num_heads=24,         # 32 dims per head, clean
+    dropout=0.1,
+)
+
