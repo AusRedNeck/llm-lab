@@ -1,5 +1,5 @@
 from model.bpe import train_bpe
-from model.config import BPE2K_10M
+from model.config import S12M_6L384
 from train.train import PRESETS, encode_file_lines
 
 TINY = ["Once there was a princess", "Lily played with the ball"]
@@ -20,8 +20,8 @@ def test_encode_file_lines_limit(tmp_path):
     assert encode_file_lines(str(p), tok, limit=1) == tok.encode(TINY[0])
 
 
-def test_bpe2k_preset_registered():
-    # Preset exists, points at the real vocab, keeps the 10M shape.
-    assert PRESETS["bpe2k"] is BPE2K_10M
-    assert BPE2K_10M.vocab_size == 2256
-    assert BPE2K_10M.context_length == 256
+def test_s12m_preset_registered():
+    # Preset exists, points at the real vocab, keeps the 6L384 shape.
+    assert PRESETS["s12m"] is S12M_6L384
+    assert S12M_6L384.vocab_size == 2256
+    assert S12M_6L384.context_length == 256

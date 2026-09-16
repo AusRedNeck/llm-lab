@@ -1,16 +1,16 @@
 """Experiment 002 — first real training loop.
 
 Usage:
-    python -m train.train --steps 500 --batch 32 --preset bytes10m
-    python -m train.train --steps 5000 --batch 64 --preset bytes10m --data tinystories
-    python -m train.train --steps 5000 --batch 64 --preset bpe2k --data tinystories --tokenizer checkpoints/bpe2k.json --use_rope
-    python -m train.train --steps 5000 --batch 64 --preset bpe2k --corpus data/librivox --tokenizer checkpoints/bpe8k.json --use_rope
+    python -m train.train --steps 500 --batch 32 --preset s11m
+    python -m train.train --steps 5000 --batch 64 --preset s11m --data tinystories
+    python -m train.train --steps 5000 --batch 64 --preset s12m --data tinystories --tokenizer checkpoints/bpe2k.json --use_rope
+    python -m train.train --steps 5000 --batch 64 --preset s12m --corpus data/librivox --tokenizer checkpoints/bpe8k.json --use_rope
 
-Presets:
-    toy      = current 4-layer toy (proves the loop works)
-    bytes10m = 10M shape, byte-level vocab 256 (train THIS first)
-    tiny10m  = 10M shape, GPT-2 BPE vocab 50304 (needs BPE tokenizer, later)
-    bpe2k    = 10M shape, TinyStories BPE vocab ~2109 (the efficiency win)
+Presets (tier + params + shape; train.py prints the true count per run):
+    t1m      = toy 4-layer (~0.9M, proves the loop works)
+    s11m     = 6L384, byte-level vocab 256 (train THIS first)
+    m49m     = 6L384, GPT-2 BPE vocab 50304 (needs BPE tokenizer, later)
+    s12m     = 6L384, TinyStories BPE vocab ~2256 (the efficiency win)
 
 Data:
     default  = synthetic byte stream (no downloads, proves loss decreases)
@@ -35,15 +35,15 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import BPE2K_10M, BPE2K_50M, DENSE_194M, DENSE_111M, LIBRI_10M, LIBRI_50M, TINY_10M, TINY_10M_BYTES, TOY_1M
+from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M52M_10L640, M60M_10L640, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
-PRESETS = {"toy": TOY_1M, "bytes10m": TINY_10M_BYTES, "tiny10m": TINY_10M,
-           "bpe2k": BPE2K_10M, "libri10m": LIBRI_10M,
-           "bpe50m": BPE2K_50M, "libri50m": LIBRI_50M,
-           "dense194m": DENSE_194M,
-           "dense111m": DENSE_111M}
+PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
+           "s12m": S12M_6L384, "s17m": S17M_6L384,
+           "m52m": M52M_10L640, "m60m": M60M_10L640,
+           "l194m": L194M_14L1024,
+           "l112m": L112M_14L768}
 
 
 
@@ -229,7 +229,7 @@ def early_stop_update(best: float, val: float, bad: int, patience: int,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--preset", default="bytes10m", choices=list(PRESETS))
+    ap.add_argument("--preset", default="s11m", choices=list(PRESETS))
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)

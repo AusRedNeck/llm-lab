@@ -54,10 +54,10 @@ def test_nats_per_byte_zero_nll():
 
 def _make_toy_checkpoint(path: str, steps: int = 10):
     """Create a minimal checkpoint file for testing."""
-    from model.config import TOY_1M
+    from model.config import T1M_4L128
     from model.transformer import Transformer
 
-    cfg = TOY_1M
+    cfg = T1M_4L128
     model = Transformer(
         vocab_size=cfg.vocab_size,
         context_length=cfg.context_length,
