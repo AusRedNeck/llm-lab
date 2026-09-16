@@ -14,6 +14,10 @@ _SPLIT = re.compile(
 )
 
 
+# One token that is never a word: documents end, then this, then next doc.
+EOS = "<|endoftext|>"
+
+
 def _latin(b: bytes) -> str:
     # Bytes -> JSON-safe string, one char per byte. Reversible via _unlatin.
     return b.decode("latin-1")
@@ -25,12 +29,31 @@ def _unlatin(s: str) -> bytes:
 
 class BPETokenizer:
     # Trained vocab: id -> byte piece, plus merge ranks that define encoding.
-    def __init__(self, vocab: dict[int, bytes], merges: dict[tuple[bytes, bytes], int]):
-        self.vocab = vocab
+    def __init__(self, vocab: dict[int, bytes], merges: dict[tuple[bytes, bytes], int],
+                 eos: bool = False):
+        # eos=False keeps old vocabs byte-identical (no silent id drift).
+        self.vocab = dict(vocab)
         self.merges = merges
-        self.token_to_id = {s: i for i, s in vocab.items()}
+        self.eos_id = None
+        if eos:
+            piece = EOS.encode("utf-8")
+            ids = [i for i, s in self.vocab.items() if s == piece]
+            self.eos_id = ids[0] if ids else len(self.vocab)
+            self.vocab.setdefault(self.eos_id, piece)
+        self.token_to_id = {s: i for i, s in self.vocab.items()}
 
     def encode(self, text: str) -> list[int]:
+        # EOS splits first so merges never fuse across documents.
+        if self.eos_id is not None and EOS in text:
+            ids: list[int] = []
+            for n, seg in enumerate(text.split(EOS)):
+                if n:
+                    ids.append(self.eos_id)
+                ids.extend(self._encode_seg(seg))
+            return ids
+        return self._encode_seg(text)
+
+    def _encode_seg(self, text: str) -> list[int]:
         # Per chunk: utf-8 bytes first, then fuse the cheapest-ranked pair.
         ids: list[int] = []
         for chunk in _SPLIT.findall(text):
@@ -56,16 +79,18 @@ class BPETokenizer:
             json.dump({
                 "vocab": {str(i): _latin(s) for i, s in self.vocab.items()},
                 "merges": [[_latin(a), _latin(b)] for a, b in self.merges],
+                "eos": self.eos_id is not None,
             }, f)
 
     @classmethod
     def load(cls, path: str) -> "BPETokenizer":
         # Merge rank = order in the saved list. Rank IS the encoding rule.
+        # Old files have no "eos" key -> False -> vocab loads untouched.
         with open(path) as f:
             raw = json.load(f)
         vocab = {int(i): _unlatin(s) for i, s in raw["vocab"].items()}
         merges = {(_unlatin(a), _unlatin(b)): r for r, (a, b) in enumerate(raw["merges"])}
-        return cls(vocab, merges)
+        return cls(vocab, merges, eos=raw.get("eos", False))
 
 
 def train_bpe(texts: list[str], num_merges: int) -> BPETokenizer:

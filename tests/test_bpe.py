@@ -45,3 +45,42 @@ def test_whitespace_is_lossless():
     tok = train_bpe(TINY, num_merges=30)
     nasty = "a  b   c\n    indented\n\tcode  123  don't"
     assert tok.decode(tok.encode(nasty)) == nasty
+
+def test_eos_off_by_default():
+    # Old behavior: no extra id, vocab math untouched.
+    tok = train_bpe(TINY, num_merges=20)
+    assert tok.eos_id is None
+    assert len(tok.vocab) == 256 + 20
+
+def test_eos_is_one_token_and_round_trips():
+    tok = train_bpe(TINY, num_merges=20)
+    eos_tok = BPETokenizer(tok.vocab, tok.merges, eos=True)
+    assert len(eos_tok.vocab) == 256 + 20 + 1
+    assert eos_tok.eos_id is not None
+    ids = eos_tok.encode("princess<|endoftext|>ball")
+    assert ids.count(eos_tok.eos_id) == 1
+    assert eos_tok.decode(ids) == "princess<|endoftext|>ball"
+
+def test_eos_save_load(tmp_path):
+    tok = train_bpe(TINY, num_merges=20)
+    eos_tok = BPETokenizer(tok.vocab, tok.merges, eos=True)
+    path = str(tmp_path / "bpe_eos.json")
+    eos_tok.save(path)
+    back = BPETokenizer.load(path)
+    assert back.eos_id == eos_tok.eos_id
+    assert back.vocab == eos_tok.vocab
+
+def test_old_files_load_untouched(tmp_path):
+    # Pre-EOS files have no "eos" key: vocab must load byte-identical.
+    import json
+    tok = train_bpe(TINY, num_merges=20)
+    path = str(tmp_path / "bpe_old.json")
+    with open(path, "w") as f:
+        json.dump({
+            "vocab": {str(i): s.decode("latin-1") for i, s in tok.vocab.items()},
+            "merges": [[a.decode("latin-1"), b.decode("latin-1")]
+                       for a, b in tok.merges],
+        }, f)
+    back = BPETokenizer.load(path)
+    assert back.eos_id is None
+    assert back.vocab == tok.vocab
