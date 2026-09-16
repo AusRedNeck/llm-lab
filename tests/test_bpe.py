@@ -38,3 +38,10 @@ def test_save_load_round_trip(tmp_path):
     assert back.decode(back.encode("Lily and the princess")) == "Lily and the princess"
     assert back.vocab == tok.vocab
     assert back.merges == tok.merges
+
+def test_whitespace_is_lossless():
+    # Double spaces, tabs, newlines, indent: all must survive the trip.
+    # The splitter may fuse, but it must never drop.
+    tok = train_bpe(TINY, num_merges=30)
+    nasty = "a  b   c\n    indented\n\tcode  123  don't"
+    assert tok.decode(tok.encode(nasty)) == nasty

@@ -6,8 +6,12 @@ import json
 import re
 from collections import Counter
 
-# Split that keeps spaces attached: "a b" -> ["a", " b"]. Spaces matter.
-_SPLIT = re.compile(r"\s?\S+")
+# Splitter: GPT-2 style. Every char lands in exactly one chunk, so
+# findall can never skip (old \s?\S+ silently ate extra spaces).
+# Branches: contractions | letters | digits | other marks | whitespace.
+_SPLIT = re.compile(
+    r"'s|'t|'re|'ve|'m|'ll|'d| ?[A-Za-z]+| ?[0-9]+| ?[^\sA-Za-z0-9]+|\s+(?!\S)|\s+"
+)
 
 
 def _latin(b: bytes) -> str:
