@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """tokenize_chunk.py — Tokenize a single chunk file to numpy shards.
 
-Usage: python tokenize_chunk.py <chunk_file> <output_dir>
+Usage: python tokenize_chunk.py <chunk_file> <output_dir> [--resume] [--tokenizer PATH]
 Each chunk writes to its own subdirectory to avoid index collisions.
+Tokenizer defaults to the fresh OWT vocab (Gen1+Gen2); point --tokenizer
+anywhere else for older vocabs.
 """
 import numpy as np
 import os
@@ -33,15 +35,21 @@ def count_existing_shards(output_dir):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python tokenize_chunk.py <chunk_file> <output_dir> [--resume]")
+        print("Usage: python tokenize_chunk.py <chunk_file> <output_dir> [--resume] [--tokenizer PATH]")
         sys.exit(1)
     
     input_file = sys.argv[1]
     output_dir = sys.argv[2]
     resume = "--resume" in sys.argv
     os.makedirs(output_dir, exist_ok=True)
-    
-    tok = BPETokenizer.load("checkpoints/bpe8k.json")
+
+    # Tokenizer: CLI wins, fresh OWT vocab is the default (old
+    # checkpoints/bpe8k.json path carried pre-Gen1 flattened whitespace).
+    tok_path = "data/incoming/bpe_owt8k.json"
+    if "--tokenizer" in sys.argv:
+        tok_path = sys.argv[sys.argv.index("--tokenizer") + 1]
+    print(f"  tokenizer={tok_path}")
+    tok = BPETokenizer.load(tok_path)
     
     # Resume: count existing shards, skip them
     skip_tokens = 0
