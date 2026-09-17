@@ -4,10 +4,13 @@ version = "0.1.0"
 description = "Learn by building a small language model from scratch"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.15.0",
+    "datasets>=5.0.1",
     "numpy>=2.5.2",
     "tiktoken>=0.14.0",
     "tokenizers>=0.23.2",
     "torch",
+    "transformers>=5.17.0",
 ]
 
 [dependency-groups]
