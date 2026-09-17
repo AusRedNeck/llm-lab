@@ -84,6 +84,15 @@ S17M_6L384 = ModelConfig(
 
 # M class: same shape, vocab/ctx follow the corpus (like the S era).
 # d=640/10H = 64/head — clean attention math.
+M50M_10L640 = ModelConfig(
+    vocab_size=4512,      # overridden from bpe_owt4k file at runtime
+    context_length=512,   # books need the longer view
+    embedding_dim=640,
+    num_layers=10,
+    num_heads=10,
+    dropout=0.1,
+)
+
 M52M_10L640 = ModelConfig(
     vocab_size=2256,      # overridden from bpe2k file at runtime
     context_length=256,   # stories are short — 256 holds plenty
