@@ -36,6 +36,9 @@ def main():
     remaining = len(shards) - done
     print(f"Resumed state: {done} done, {remaining} to go", flush=True)
 
+    # Ensure temp dir exists (resume-safe)
+    os.makedirs(TEMP_DIR, exist_ok=True)
+
     # Phase 1: encode each shard individually via tokenize_stream.py
     shard_token_files = []
     for i, shard_path in enumerate(shards):
