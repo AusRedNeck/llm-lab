@@ -116,3 +116,26 @@ Config: libri50m preset — vocab 8256 (bpe8k), ctx 512, embed 640, 10L10H,
 dropout 0.1, ~52M params. 193M tokens from Gutenberg books.
 Hypothesis: 50M should generalize better on 193M tokens than TinyStories —
 more data matches more capacity. Val should land below 4.84 (007's 10M result).
+
+### 010 — M50M Full OpenWebText (4k vocab)
+Status: DONE (Sep 17, 2026 — Ronin 4070 Ti)
+Config: m50m preset — vocab 4512 (bpe_owt4k), ctx 512, embed 640, 10L10H,
+dropout 0.1, ~55M params. Full OpenWebText (~4.8B tokens).
+Budget: 20k steps, batch 32, LR 3e-4. No early stopping (patience=0).
+Result: best val 4.0986 @ step 2600. Process died at step ~17,050 (likely OOM or
+crash). Final state: train 0.10, val 9.98 — completely overfit.
+Verdict: 4k vocab is too small for 55M params. Model runs out of embedding
+resolution early and memorizes training data. Best val (4.09) is the same as
+every other vocab size — the embedding layer is the bottleneck, not data or
+architecture. Next: try 16k vocab (experiment 011).
+KEEPER: checkpoints/exp002_m50m_rope_bpe_owt4k_202609172151_step2500.pt
+LESSON: **Always use --patience with early stopping.** Without it, the model
+wastes hours memorizing after the val inflection point. Set patience=10
+(val must improve by min_delta=0.001 within 10 checks = 1000 steps).
+
+### 011 — M50M Full OpenWebText (16k vocab)
+Status: QUEUED
+Config: same as 010 but with bpe_owt16k tokenizer (~16k vocab).
+Hypothesis: larger vocab gives the embedding layer more resolution, which
+should improve generalization for 55M params. Target val < 4.09.
+NOTE: use --patience 10 --min_delta 0.001 for early stopping.
