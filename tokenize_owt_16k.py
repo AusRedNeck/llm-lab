@@ -1,121 +1,233 @@
 #!/usr/bin/env python3
-"""Tokenize OWT shards with 16k vocab, serialize (one file at a time), concatenate result.
+"""Encode the 80 OpenWebText shards with the 16k BPE tokenizer, one shard at a time.
+
+Why it's built this way
+-----------------------
+* **Serialized.** One shard, one process, one open file. Earlier versions either
+  tried to encode the whole 40GB in one pass (Python list of 10B ints -> dies on
+  a 34GB box) or loaded all 80 shard tensors into RAM at the end to torch.cat
+  them (also dies). Here the output file is *appended* shard by shard, so peak
+  RAM is one 500K-char chunk (~4MB).
+* **On D:, never C:.** No tempfile, no %TEMP%. Work files and the output all
+  live under llm-lab/data.
+* **Resumable.** A manifest records which shards are done and how many tokens
+  each produced. Kill it, rerun it, it skips what's finished. Partial shards
+  from a crash are truncated away and redone — token streams can't have holes.
+
+Output (defaults):
+    data/openwebtext_combined_bpe_owt16k.bin            raw int32 tokens
+    data/openwebtext_combined_bpe_owt16k.bin.manifest.json
+
+Train straight off the .bin — token_io/train.py memmap it, so the corpus is
+never loaded into RAM.
 
 Usage:
-    python d:/Projects/llm-lab/tokenize_owt_16k.py
-
-Output: openwebtext_combined_bpe_owt16k.pt (~45-50GB)
-Total estimated runtime: ~6 hours on 4070 Ti CPU.
+    python tokenize_owt_16k.py                      # full 80-shard run (~6h)
+    python tokenize_owt_16k.py --smoke              # 3 shards x 20M chars, ~40s
+    python tokenize_owt_16k.py --limit-shards 10    # partial run
 """
-import os, sys, glob, shutil
-import numpy as np
-import torch
+from __future__ import annotations
 
-SCRIPT_DIR = r"D:\Projects\llm-lab"
-SHARD_DIR = os.path.join(SCRIPT_DIR, "data", "openwebtext", "shards")
-VOCAB_JSON = os.path.join(SCRIPT_DIR, "data", "bpe_owt16k.json")
-OUTPUT_FILE = os.path.join(SCRIPT_DIR, "data", "openwebtext_combined_bpe_owt16k.pt")
-TOKENIZE_SCRIPT = os.path.join(SCRIPT_DIR, "tokenize_stream.py")
-TEMP_DIR = os.path.join(SCRIPT_DIR, ".tmp_shard_tokens")
+import argparse
+import datetime as _dt
+import glob
+import os
+import shutil
+import sys
+import time
+
+import token_io
+from token_io import count_tokens, encode_file_stream, human, fmt_eta, read_meta, write_meta
+from model.bpe import BPETokenizer
+
+DATA = token_io.data_dir()
+DEFAULT_SHARD_DIR = os.path.join(DATA, "openwebtext", "shards")
+DEFAULT_VOCAB = os.path.join(DATA, "bpe_owt16k.json")
+DEFAULT_OUT = os.path.join(DATA, "openwebtext_combined_bpe_owt16k.bin")
+DEFAULT_CHUNK_CHARS = 500_000          # ~1s of encode work, ~4MB peak RAM
 
 
-def main():
-    # Find shards sorted by number
-    shards = sorted(glob.glob(os.path.join(SHARD_DIR, "*.txt")))
-    print(f"Found {len(shards)} shards ({sum(os.path.getsize(s) for s in shards)/(1024**3):.1f} GB total)", flush=True)
-    if len(shards) != 80:
-        print(f"WARNING: expected 80 shards, found {len(shards)}", flush=True)
+def parse_args(argv=None):
+    ap = argparse.ArgumentParser(description="Serialize OWT shards -> 16k token file")
+    ap.add_argument("--shards-dir", default=DEFAULT_SHARD_DIR)
+    ap.add_argument("--vocab", default=DEFAULT_VOCAB)
+    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS)
+    ap.add_argument("--limit-shards", type=int, default=0,
+                    help="encode only the first N shards (0 = all)")
+    ap.add_argument("--shard-char-limit", type=int, default=0,
+                    help="encode only the first N chars of each shard (smoke)")
+    ap.add_argument("--smoke", action="store_true",
+                    help="short end-to-end rehearsal: 3 shards x 20M chars, own output")
+    ap.add_argument("--no-probe", action="store_true", help="skip the preflight probe")
+    return ap.parse_args(argv)
 
-    # Resume check: find already-encoded shards in TEMP_DIR
-    existing_shards = set()
-    if os.path.isdir(TEMP_DIR):
-        for f in os.listdir(TEMP_DIR):
-            if f.endswith("_encoded.pt"):
-                existing_shards.add(f.replace("_encoded.pt", ""))
-    done = len(existing_shards)
-    remaining = len(shards) - done
-    print(f"Resumed state: {done} done, {remaining} to go", flush=True)
 
-    # Ensure temp dir exists (resume-safe)
-    os.makedirs(TEMP_DIR, exist_ok=True)
+def shard_list(shards_dir: str) -> list[str]:
+    shards = sorted(glob.glob(os.path.join(shards_dir, "*.txt")))
+    if not shards:
+        raise SystemExit(f"no .txt shards under {shards_dir}")
+    return shards
 
-    # Phase 1: encode each shard individually via tokenize_stream.py
-    shard_token_files = []
-    for i, shard_path in enumerate(shards):
-        basename = os.path.basename(shard_path).replace(".txt", "")
-        out_name = f"{basename}_encoded.pt"
-        out_path = os.path.join(TEMP_DIR, out_name)
 
-        cmd = [sys.executable, "-u", TOKENIZE_SCRIPT, shard_path, VOCAB_JSON, out_path]
-        
-        # Skip if already encoded (resume support)
-        cached = os.path.join(TEMP_DIR, f"{basename}_encoded.pt")
-        if basename in existing_shards and os.path.exists(cached):
-            sz = os.path.getsize(cached) / (1024**2)
-            print(f"[{i+1}/{len(shards)}] {basename} [SKIP - already encoded {sz:.0f}MB]", flush=True)
-            shard_token_files.append(cached)
+def probe_ratio(shard_path: str, vocab_path: str, chars: int = 200_000) -> float:
+    """chars-per-token on a small sample — used for preflight size and ETA."""
+    tok = BPETokenizer.load(vocab_path)
+    with open(shard_path, encoding="utf-8", errors="replace") as f:
+        sample = f.read(chars)
+    n = len(tok.encode(sample))
+    return len(sample) / n if n else 4.0
+
+
+def reconcile(out_bin: str, records: dict, order: list[str]) -> dict:
+    """Drop manifest records that don't match the bytes actually on disk."""
+    expected = sum(int(r["tokens"]) for r in records.values()) * token_io.DTYPE.itemsize
+    actual = os.path.getsize(out_bin) if os.path.exists(out_bin) else 0
+    if actual == expected:
+        return records
+    if actual > expected:
+        # Bytes past the last recorded shard are a half-written shard: cut them,
+        # or every later token would be shifted by the garbage prefix.
+        print(f"  trimming {human(actual - expected)} of partial shard data", flush=True)
+        with open(out_bin, "r+b") as f:
+            f.truncate(expected)
+        return records
+    # File is shorter than the manifest claims — trust the file, walk the order,
+    # keep only the records that fully fit.
+    print(f"  manifest over-claims by {human(expected - actual)}; rebuilding record", flush=True)
+    acc, keep = 0, {}
+    for name in order:
+        rec = records.get(name)
+        if not rec:
             continue
-        
-        print(f"[{i+1}/{len(shards)}] {basename} [{os.path.getsize(shard_path)//1024//1024}MB]", flush=True)
-        
-        import subprocess
-        proc = subprocess.run(cmd, capture_output=False)
-        if proc.returncode != 0:
-            print(f"  FAILED exit={proc.returncode}", flush=True)
+        size = int(rec["tokens"]) * token_io.DTYPE.itemsize
+        if acc + size > actual:
+            break
+        keep[name] = rec
+        acc += size
+    with open(out_bin, "r+b") as f:
+        f.truncate(acc)
+    return keep
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+
+    if args.smoke:
+        args.limit_shards = args.limit_shards or 3
+        args.shard_char_limit = args.shard_char_limit or 20_000_000
+        args.chunk_chars = min(args.chunk_chars, 2_000_000)   # force many chunks
+        if args.out == DEFAULT_OUT:
+            args.out = os.path.join(DATA, "tok16k_smoke.bin")
+        print("SMOKE MODE: 3 shards x 20M chars, own output file\n", flush=True)
+
+    if not os.path.exists(args.vocab):
+        raise SystemExit(f"vocab not found: {args.vocab}")
+    shards = shard_list(args.shards_dir)
+    if args.limit_shards:
+        shards = shards[:args.limit_shards]
+
+    total_bytes = sum(os.path.getsize(s) for s in shards)
+    man_path = args.out + ".manifest.json"
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+
+    tok = BPETokenizer.load(args.vocab)
+    print(f"vocab      {os.path.basename(args.vocab)} ({len(tok.vocab):,} tokens)")
+    print(f"shards     {len(shards)} files, {human(total_bytes)} of text")
+    print(f"output     {args.out}")
+    print(f"chunk size {args.chunk_chars:,} chars (peak RAM ~{args.chunk_chars * 8 / 1e6:.0f}MB)")
+
+    # Preflight: what will this cost, and is there room for it?
+    ratio = probe_ratio(shards[0], args.vocab) if not args.no_probe else 4.0
+    est_bytes = int(total_bytes / ratio) * token_io.DTYPE.itemsize
+    free = shutil.disk_usage(os.path.dirname(os.path.abspath(args.out))).free
+    print(f"estimate   ~{human(total_bytes / ratio)} tokens -> ~{human(est_bytes)} "
+          f"(measured {ratio:.2f} chars/token)")
+    if est_bytes > free * 0.9:
+        raise SystemExit(f"not enough disk: need ~{human(est_bytes)}, "
+                         f"free {human(free)} on {os.path.splitdrive(args.out)[0]}")
+    print(f"disk       {human(free)} free on {os.path.splitdrive(os.path.abspath(args.out))[0]} "
+          f"({est_bytes / free * 100:.1f}% of it used by this run)\n")
+
+    # Resume: reconcile the manifest against what's really on disk.
+    manifest = read_meta(man_path)
+    same_run = (manifest.get("vocab") == os.path.abspath(args.vocab)
+                and manifest.get("chunk_chars") == args.chunk_chars
+                and manifest.get("shard_char_limit") == args.shard_char_limit
+                and manifest.get("dst") == os.path.abspath(args.out))
+    records = dict(manifest.get("shards", {})) if same_run else {}
+    if records:
+        records = reconcile(args.out, records, [os.path.basename(s) for s in shards])
+    else:
+        if os.path.exists(args.out) and manifest:
+            print("  different settings than the last run — starting the output over", flush=True)
+            open(args.out, "wb").close()
+    done = len(records)
+    print(f"resume     {done} shard(s) done, {len(shards) - done} to go"
+          f"{' (all done — nothing to do)' if done >= len(shards) else ''}\n", flush=True)
+
+    t_start = time.time()
+    shard_times: list[float] = []
+    written_this_pass = 0
+
+    def save(complete: bool) -> None:
+        write_meta(man_path, {
+            "vocab": os.path.abspath(args.vocab),
+            "dst": os.path.abspath(args.out),
+            "chunk_chars": args.chunk_chars,
+            "shard_char_limit": args.shard_char_limit,
+            "shards": records,
+            "total_tokens": sum(int(r["tokens"]) for r in records.values()),
+            "complete": complete,
+            "updated": _dt.datetime.now().isoformat(timespec="seconds"),
+        })
+
+    for i, shard in enumerate(shards):
+        name = os.path.basename(shard)
+        if name in records:
+            r = records[name]
+            print(f"[{i + 1:>2}/{len(shards)}] {name} SKIP — {int(r['tokens']):,} tokens "
+                  f"already written", flush=True)
             continue
-        
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            shard_token_files.append(out_path)
-            sz = os.path.getsize(out_path) / (1024**2)
-            print(f"  -> {sz:.0f} MB", flush=True)
-        else:
-            print(f"  WARNING: no output!", flush=True)
 
-    if not shard_token_files:
-        print("ERROR: No shards encoded!")
-        sys.exit(1)
+        t0 = time.time()
+        print(f"[{i + 1:>2}/{len(shards)}] {name} [{human(os.path.getsize(shard))}]", flush=True)
+        result = encode_file_stream(
+            shard, args.vocab, args.out, chunk_chars=args.chunk_chars,
+            limit_chars=args.shard_char_limit, append=True, write_sidecar=False,
+            log_every=max(1, int(20 * 500_000 / args.chunk_chars)), tok=tok)
 
-    # Phase 2: concatenate all shard tensors
-    print(f"\nConcatenating {len(shard_token_files)} shard encodings...", flush=True)
-    
-    offset = 0
-    total_tokens = 0
-    for fp in shard_token_files:
-        t = torch.load(fp, weights_only=True)
-        n = len(t)
-        total_tokens += n
-        offset += n
-        print(f"  + {n:,} tokens ({total_tokens:,} total)", flush=True)
+        if result["tokens"] == 0:
+            print(f"  WARNING: no tokens produced — leaving this shard out", flush=True)
+            continue
+        records[name] = {"tokens": result["tokens"], "chars": result["chars"],
+                         "seconds": round(result["seconds"], 1)}
+        shard_times.append(result["seconds"])
+        written_this_pass += 1
+        total_tokens = sum(int(r["tokens"]) for r in records.values())
 
-    # Re-build from individual tensors to avoid OOM
-    combined_parts = []
-    for fp in shard_token_files:
-        t = torch.load(fp, weights_only=True)
-        combined_parts.append(t)
-    combined = torch.cat(combined_parts)
-    
-    del combined_parts
-    torch.cuda.empty_cache() if hasattr(torch, 'cuda') else None
-    
-    print(f"Writing {OUTPUT_FILE}...", flush=True)
-    torch.save(combined, OUTPUT_FILE)
-    
-    import time
-    out_size_mb = os.path.getsize(OUTPUT_FILE) / (1024**2)
-    print(f"\nDONE: {total_tokens:,} total tokens -> {out_size_mb:.0f} MB ({out_size_mb/1024:.1f} GB)")
+        remaining = len(shards) - len(records)
+        eta = (sum(shard_times) / len(shard_times)) * remaining if shard_times else 0
+        print(f"  -> {result['tokens']:,} tokens in {fmt_eta(result['seconds'])} "
+              f"({result['tok_per_sec']:,.0f} tok/s) | total {total_tokens:,} | "
+              f"ETA {fmt_eta(eta)}" if remaining else
+              f"  -> {result['tokens']:,} tokens in {fmt_eta(result['seconds'])}", flush=True)
+        save(complete=False)
 
-    # Cleanup temp files
-    for fp in shard_token_files:
-        try:
-            os.unlink(fp)
-        except:
-            pass
-    try:
-        shutil.rmtree(TEMP_DIR, ignore_errors=True)
-    except:
-        pass
-    print("Temp cleaned up.")
+    all_done = len(records) >= len(shards)
+    save(complete=all_done and not args.shard_char_limit)
+
+    total_tokens = sum(int(r["tokens"]) for r in records.values())
+    size = os.path.getsize(args.out)
+    print(f"\n{'-' * 68}")
+    print(f"tokens on disk : {total_tokens:,}")
+    print(f"file           : {args.out} ({human(size)})")
+    print(f"this pass      : {written_this_pass} shard(s) in {fmt_eta(time.time() - t_start)}")
+    print(f"complete       : {all_done and not args.shard_char_limit}")
+    print(f"verify         : python verify_tokens.py --bin \"{os.path.basename(args.out)}\" "
+          f"--vocab \"{os.path.basename(args.vocab)}\"")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

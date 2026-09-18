@@ -1,82 +1,76 @@
 #!/usr/bin/env python3
-"""Stream-tokenize a large text file with BPE, writing chunks to disk.
+"""Stream-tokenize one text file with BPE → raw int32 token file.
 
-Avoids RAM blowup: encodes in 500K-char chunks, saves each as a temp
-numpy file, then concatenates at the end via memory-mapped reads.
+Replaces the old version that parked intermediate chunks in the system temp
+directory (%TEMP%, i.e. C:) and concatenated via a full in-RAM numpy buffer.
+Now it appends straight to the destination on disk, so peak RAM is one chunk.
 
 Usage:
-    python -u tokenize_stream.py <src.txt> <vocab.json> <dst.pt>
+    python -u tokenize_stream.py <src.txt> <vocab.json> <dst.bin>
+    python -u tokenize_stream.py <src.txt> <vocab.json> <dst.pt>    # + .pt conversion
+    python -u tokenize_stream.py <src.txt> <vocab.json> <dst.bin> --resume
+    python -u tokenize_stream.py <src.txt> <vocab.json> <dst.bin> --chunk-chars 2000000
+
+Notes:
+  * dst.bin is the real artifact: raw little-endian int32, memmap-friendly.
+  * A .pt destination keeps the old command shape working — the .bin is written
+    first, then converted without ever loading the whole thing into RAM.
+  * --resume continues an interrupted run from <dst>.meta.json.
 """
+from __future__ import annotations
+
+import argparse
 import os
 import sys
 import time
-import tempfile
-import numpy as np
-import torch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from model.bpe import BPETokenizer
-
-CHUNK_CHARS = 500_000  # 500K chars per encode call
+import token_io
+from token_io import encode_file_stream, bins_to_pt, human
 
 
-def main():
-    if len(sys.argv) != 4:
-        print("Usage: python -u tokenize_stream.py <src.txt> <vocab.json> <dst.pt>")
-        sys.exit(1)
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("src")
+    ap.add_argument("vocab")
+    ap.add_argument("dst")
+    ap.add_argument("--chunk-chars", type=int, default=500_000)
+    ap.add_argument("--limit-chars", type=int, default=0,
+                    help="stop after N chars (smoke slices)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue from <dst>.meta.json instead of restarting")
+    args = ap.parse_args()
 
-    src, vocab_path, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-    tok = BPETokenizer.load(vocab_path)
-    print(f"Vocab: {len(tok.vocab)}", flush=True)
+    if not os.path.exists(args.src):
+        raise SystemExit(f"source not found: {args.src}")
+    if not os.path.exists(args.vocab):
+        raise SystemExit(f"vocab not found: {args.vocab}")
 
-    tmpdir = tempfile.mkdtemp(prefix="tok_")
-    chunk_files = []
-    total = 0
+    # A .pt destination is a convenience wrapper: the token stream itself is
+    # always the .bin, and the .pt is a thin conversion at the end.
+    wants_pt = args.dst.endswith(".pt")
+    bin_path = args.dst[:-3] + ".bin" if wants_pt else args.dst
+    os.makedirs(os.path.dirname(os.path.abspath(bin_path)) or ".", exist_ok=True)
+
+    print(f"src   {args.src} ({human(os.path.getsize(args.src))})")
+    print(f"vocab {args.vocab}")
+    print(f"bin   {bin_path}")
+    print(flush=True)
+
     t0 = time.time()
+    result = encode_file_stream(args.src, args.vocab, bin_path,
+                               chunk_chars=args.chunk_chars,
+                               limit_chars=args.limit_chars,
+                               resume=args.resume,
+                               log_every=max(1, int(20 * 500_000 / args.chunk_chars)))
+    print(f"\n{result['tokens']:,} tokens in {time.time() - t0:,.0f}s "
+          f"({result['tok_per_sec']:,.0f} tok/s) -> {bin_path} "
+          f"({human(result['bytes'])})", flush=True)
 
-    with open(src, encoding="utf-8", errors="replace") as f:
-        while True:
-            text = f.read(CHUNK_CHARS)
-            if not text:
-                break
-            ids = tok.encode(text)
-            # Save chunk to disk immediately — never accumulate in RAM
-            cf = os.path.join(tmpdir, f"chunk_{len(chunk_files):04d}.npy")
-            np.save(cf, np.array(ids, dtype=np.int32))
-            chunk_files.append(cf)
-            total += len(ids)
-            dt = time.time() - t0
-            rate = total / dt if dt > 0 else 0
-            print(f"  chunk {len(chunk_files):4d} | {total:>12,} toks | {rate:,.0f} tok/s", flush=True)
-
-    # Concatenate via memory-mapped reads — peak RAM = one chunk at a time
-    print(f"\nConcatenating {len(chunk_files)} chunks...", flush=True)
-    t1 = time.time()
-
-    # First pass: count total tokens
-    sizes = []
-    for cf in chunk_files:
-        arr = np.load(cf, mmap_mode="r")
-        sizes.append(len(arr))
-    total = sum(sizes)
-
-    # Allocate output and fill chunk by chunk
-    out = np.empty(total, dtype=np.int32)
-    offset = 0
-    for cf, sz in zip(chunk_files, sizes):
-        arr = np.load(cf, mmap_mode="r")
-        out[offset:offset + sz] = arr
-        offset += sz
-
-    torch.save(torch.from_numpy(out), dst)
-    dt = time.time() - t0
-    print(f"Done: {total:,} tokens in {dt:.0f}s ({total/dt:,.0f} tok/s) -> {dst}", flush=True)
-
-    # Cleanup temp chunks
-    for cf in chunk_files:
-        os.unlink(cf)
-    os.rmdir(tmpdir)
+    if wants_pt:
+        print(f"\nconverting to {args.dst} ...", flush=True)
+        bins_to_pt(bin_path, args.dst)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

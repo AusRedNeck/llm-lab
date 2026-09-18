@@ -138,4 +138,28 @@ Status: QUEUED
 Config: same as 010 but with bpe_owt16k tokenizer (~16k vocab).
 Hypothesis: larger vocab gives the embedding layer more resolution, which
 should improve generalization for 55M params. Target val < 4.09.
-NOTE: use --patience 10 --min_delta 0.001 for early stopping.
+NOTE: smoke 200 first, then --patience 10 --min_delta 0.001 for full run.
+
+### 011 — M50M Full OpenWebText (16k vocab)
+Status: TOKENIZING (Sep 18, 2026 — Ronin)
+Config: same as 010 but with bpe_owt16k tokenizer (16,256 vocab). ~70M params
+(10M of that is the bigger embedding table).
+
+Pipeline (rewritten Sep 18 — the first three attempts all died):
+  run_16k_smoke.bat   rehearsal: 3 shards x 20M chars -> verify -> 200 train steps (~2.5 min)
+  run_16k_full.bat    the real thing: 80 shards, serialized, resumable (~7h)
+  tokenize_owt_16k.py orchestrator (manifest, resume, preflight disk check)
+  token_io.py         streaming encoder + memmap reader (no %TEMP%, no RAM blowup)
+  verify_tokens.py    7 acceptance checks — run before trusting any long encode
+Train with the .bin:  --tok_cache data/openwebtext_combined_bpe_owt16k.bin
+
+What broke before, and why it can't now:
+  * tempfile.mkdtemp() put per-chunk .npy files on C: -> writes only under data/ now
+  * torch.cat() of all 80 shard tensors needed ~80GB RAM on a 34GB box -> the
+    output is appended shard by shard; peak RAM is one 500K-char chunk (~4MB)
+  * torch.load() of a 47GB .pt is how run 010 died at step ~17k -> .bin token
+    files are memmapped, so the corpus streams from disk at 0 RAM
+  * loss.jsonl was unbuffered-free, so a watcher saw an empty log -> flushed per step
+
+Smoke evidence (Sep 18): encode 40s (370k tok/s), verify 7/7, resume skip all 3
+shards in 0.7s, 200 train steps in 81s (0.4s/step -> 20k steps ~2.2h on the 4070 Ti).

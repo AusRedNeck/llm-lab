@@ -92,13 +92,41 @@ def load_bytes_corpus(files: list[str]) -> torch.Tensor:
     return torch.from_numpy(_np.concatenate(parts))
 
 
+def load_token_cache(cache_path: str) -> torch.Tensor:
+    # Raw int32 .bin token files are memory-mapped, never read into RAM: a
+    # 38GB corpus cannot fit in 34GB, and waiting on torch.load of a huge
+    # .pt is what killed run 010 around step 17k. A memmap streams from disk
+    # and keeps the process small.
+    if cache_path.endswith(".bin"):
+        import warnings
+        import numpy as _np
+        n = os.path.getsize(cache_path) // 4
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # torch nags about read-only arrays
+            t = torch.from_numpy(_np.memmap(cache_path, dtype="<i4", mode="r",
+                                            shape=(n,)))
+        print(f"  memmap {cache_path}: {n:,} tokens ({n * 4 / 1e9:.1f}GB on disk, 0 RAM)")
+        return t
+    return torch.load(cache_path, map_location="cpu", weights_only=True)
+
+
 def load_bpe_corpus(tok: BPETokenizer, files: list[str],
                     cache_pt: str) -> torch.Tensor:
     # Encode once, reuse forever. Cache key includes corpus+vocab names
     # so TinyStories_bpe2k.pt and librivox_bpe8k.pt never collide.
     if os.path.exists(cache_pt):
         print(f"loading BPE cache {cache_pt} ...")
-        return torch.load(cache_pt, map_location="cpu", weights_only=True)
+        return load_token_cache(cache_pt)
+    total_bytes = sum(os.path.getsize(p) for p in files)
+    if total_bytes > 1_000_000_000:
+        # Encoding this in-process builds a Python list of ints: ~10x the file
+        # size in RAM, slower than the disk it lives on. Refuse loudly instead
+        # of hanging for a day and then dying.
+        raise SystemExit(
+            f"no token cache at {cache_pt} and the corpus is {total_bytes / 1e9:.1f}GB.\n"
+            f"Build it once with the streaming tokenizer, then pass it back:\n"
+            f"    python tokenize_owt_16k.py\n"
+            f"    python -m train.train ... --tok_cache data/<name>.bin")
     print(f"encoding {len(files)} file(s) -> {cache_pt} (one-time cost) ...")
     ids: list[int] = []
     for path in files:
@@ -184,7 +212,7 @@ def load_tinystories_bpe(tok: BPETokenizer, device,
     # ~20min, but the int32 cache loads in seconds and is never rewritten.
     if os.path.exists(cache_pt):
         print(f"loading BPE cache {cache_pt} ...")
-        return torch.load(cache_pt, map_location="cpu", weights_only=True)
+        return load_token_cache(cache_pt)
     if not os.path.exists(cache_txt):
         print(f"missing {cache_txt}; falling back to synthetic data")
         return None
@@ -490,6 +518,7 @@ def main():
                                 "avg50": round(running, 4),
                                 "val": round(val, 4) if val else None,
                                 "lr": lr}) + "\n")
+        log_f.flush()   # a watcher should see steps appear, not wait for 4KB
         if step % 25 == 0 or step == 1:
             vstr = f" val={val:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
