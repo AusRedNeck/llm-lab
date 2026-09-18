@@ -163,3 +163,38 @@ What broke before, and why it can't now:
 
 Smoke evidence (Sep 18): encode 40s (370k tok/s), verify 7/7, resume skip all 3
 shards in 0.7s, 200 train steps in 81s (0.4s/step -> 20k steps ~2.2h on the 4070 Ti).
+
+## Current state (2026-09-18) — read this first, it's the handoff
+
+**16k OWT corpus:** `data/openwebtext_combined_bpe_owt16k.bin` (raw int32, ~38GB, ~9.46B
+tokens expected). Encoded in parallel (8 worker processes, `run_16k_full_par.bat`),
+~1.6M tok/s aggregate.
+
+One worker died mid-run to an unreproducible fault in the BPE encoder
+(`TypeError: slice indices must be integers` in model/bpe.py). Its block (shards
+33-42) is therefore missing and the run **deliberately refuses to merge**. The
+encoder is now hardened (`sentinel -1` + `token_io.encode_resilient` bisect with
+evidence capture in `<dst>.encode_errors.jsonl`) and the parent reports worker
+deaths immediately. Commit `9a41716`.
+
+Following up unattended: `followup_wait.ps1` holds until the encode exits, then runs
+a second pass that reads the merge plan off the parts on disk, encodes only the gap,
+merges in corpus order and verifies. **Outcome is one line in `logs/followup.log`**
+(VERIFIED OK / VERIFY FAILED / ENCODE INCOMPLETE).
+
+Check progress:  `tail -2 logs/16k_tokenize_par.log`   (status lines every 60s)
+Rerun by hand:   `run_16k_full_par.bat`   (resumable — finished shards are skipped)
+Verify:          `python verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin --vocab data/bpe_owt16k.json --src data/openwebtext/shards/train-00000-of-00080.txt --manifest`
+Tests:           `python -m pytest tests/test_tokenizer_safety.py tests/test_bpe_resilience.py -q`  (16 tests)
+
+**Next: exp 011 training** — m50m, 20k steps, `--patience 10 --min_delta 0.001`,
+training off the memmapped `.bin` (never a 38GB `.pt` — that's how run 010 died at
+step ~17k). Measured 0.4s/step → ~2.2h. Hypothesis: 16k vocab gives the embedding
+more resolution than 4k did (exp 010 best val 4.0986 @ step 2600, then overfit).
+
+**Curated corpora on disk** (~149GB, fetched 2026-09-18, don't re-download):
+`data/cosmopedia/` (336 parquet, 86 GiB), `data/finewiki/` (15 parquet, 36 GiB, en
+only), `data/open_web_math/` (114 parquet, 26 GiB). Fetch script: `fetch_corpus.py`
+(validates patterns against the real file list first; resumable). Next big target if
+we want volume: FineWeb-Edu sample-100BT (267GB, ~100B tokens) — but note the cost:
+4 bytes/token means a 373GB file and ~65h of CPU encode single-core (~8h with 8 workers).
