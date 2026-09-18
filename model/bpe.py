@@ -57,18 +57,25 @@ class BPETokenizer:
         # Per chunk: utf-8 bytes first, then fuse the cheapest-ranked pair.
         ids: list[int] = []
         for chunk in _SPLIT.findall(text):
-            parts = [bytes([b]) for b in chunk.encode("utf-8")]
-            while len(parts) > 1:
-                best, best_rank = None, None
-                for i in range(len(parts) - 1):
-                    rank = self.merges.get((parts[i], parts[i + 1]))
-                    if rank is not None and (best_rank is None or rank < best_rank):
-                        best, best_rank = i, rank
-                if best is None:
-                    break  # no known pair left -> keep bytes (always encodable)
-                parts[best:best + 2] = [parts[best] + parts[best + 1]]
-            ids.extend(self.token_to_id[p] for p in parts)
+            ids.extend(self._encode_chunk(chunk))
         return ids
+
+    def _encode_chunk(self, chunk: str) -> list[int]:
+        # One regex chunk in, token ids out.
+        parts = [bytes([b]) for b in chunk.encode("utf-8")]
+        while len(parts) > 1:
+            # -1, never None: the value that goes into the slice below must
+            # always be an int, so it cannot raise "slice indices must be
+            # integers" no matter what the pair scan does.
+            best, best_rank = -1, None
+            for i in range(len(parts) - 1):
+                rank = self.merges.get((parts[i], parts[i + 1]))
+                if rank is not None and (best_rank is None or rank < best_rank):
+                    best, best_rank = i, rank
+            if best < 0:
+                break  # no known pair left -> keep bytes (always encodable)
+            parts[best:best + 2] = [parts[best] + parts[best + 1]]
+        return [self.token_to_id[p] for p in parts]
 
     def decode(self, ids: list[int]) -> str:
         # Pieces are bytes. Glue, then utf-8 (replace guards cut sequences).

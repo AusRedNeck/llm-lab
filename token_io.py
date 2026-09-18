@@ -15,6 +15,7 @@ Write with encode_file_stream(), read with memmap_tokens(). That's the contract.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sys
@@ -79,6 +80,64 @@ def memmap_tokens(path: str) -> np.ndarray:
     return np.memmap(path, dtype=DTYPE, mode="r", shape=(n,))
 
 
+class EncodeErrorLog:
+    """Records every encode failure: a JSONL index plus the raw offending text.
+
+    The point is the evidence. A worker died once with a slice TypeError that
+    would not reproduce — if it (or anything like it) happens again, the exact
+    bytes that triggered it land on disk instead of vanishing with the process.
+    """
+
+    def __init__(self, dst_bin: str, keep_pieces: int = 20):
+        self.jsonl = dst_bin + ".encode_errors.jsonl"
+        self.piece_dir = dst_bin + ".encode_errors"
+        self.keep_pieces = keep_pieces
+        self.failures = 0
+
+    def __call__(self, piece: str, exc: Exception) -> None:
+        self.failures += 1
+        entry = {"when": datetime.datetime.now().isoformat(timespec="seconds"),
+                 "chars": len(piece), "error": f"{type(exc).__name__}: {exc}",
+                 "snippet": piece[:400]}
+        if self.failures <= self.keep_pieces:
+            os.makedirs(self.piece_dir, exist_ok=True)
+            piece_path = os.path.join(self.piece_dir, f"piece_{self.failures:03d}.txt")
+            with open(piece_path, "w", encoding="utf-8") as f:
+                f.write(piece)
+            entry["piece_file"] = piece_path
+        with open(self.jsonl, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+        print(f"  !! encoder raised on {len(piece):,} chars ({type(exc).__name__}) — "
+              f"bisected, kept, and logged to {os.path.basename(self.jsonl)}", flush=True)
+
+
+def encode_resilient(tok, text: str, on_error=None) -> list[int]:
+    """Encode text; if the encoder throws, bisect the text and keep going.
+
+    A bad stretch of bytes must not kill a six-hour corpus encode. BPE is applied
+    per regex chunk anyway, so halving the text costs a token or two at the seam
+    and nothing else. If the pieces keep failing the exception is re-raised:
+    a crash is fine, silently dropped data is not.
+    """
+    out: list[int] = []
+    stack = [text]
+    splits = 0
+    while stack:
+        piece = stack.pop()
+        try:
+            out.extend(tok.encode(piece))
+        except Exception as exc:
+            if len(piece) <= 1 or splits >= 32:
+                raise
+            splits += 1
+            if on_error is not None:
+                on_error(piece, exc)
+            mid = len(piece) // 2
+            stack.append(piece[mid:])     # popped first, so output stays ordered
+            stack.append(piece[:mid])
+    return out
+
+
 def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
                        chunk_chars: int = 500_000, limit_chars: int = 0,
                        resume: bool = False, append: bool = False,
@@ -120,6 +179,17 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
             open(dst_bin, "wb").close()      # fresh: never inherit old bytes
         out_mode = "r+b" if chars else "wb"
 
+    # A crashed worker once lost a shard to an unreproducible encoder fault.
+    # Now any encode exception bisects the chunk, keeps the data, and files the
+    # offending bytes under <dst>.encode_errors/ for a real fix later.
+    errlog: EncodeErrorLog | None = None
+
+    def on_error(piece: str, exc: Exception) -> None:
+        nonlocal errlog
+        if errlog is None:
+            errlog = EncodeErrorLog(dst_bin)
+        errlog(piece, exc)
+
     t0 = time.time()
     n_chunks = 0
 
@@ -133,7 +203,7 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
             text = f.read(n)
             if not text:
                 break
-            ids = tok.encode(text)
+            ids = encode_resilient(tok, text, on_error)
             np.asarray(ids, dtype=DTYPE).tofile(out)
             chars += len(text)
             tokens += len(ids)
@@ -164,6 +234,7 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
     dt = time.time() - t0
     return {"chars": chars, "tokens": tokens, "bytes": out_size,
             "seconds": dt, "complete": complete,
+            "encode_failures": errlog.failures if errlog else 0,
             "tok_per_sec": tokens / dt if dt else 0.0}
 
 
