@@ -35,7 +35,7 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
+from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
@@ -43,6 +43,7 @@ PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "s12m": S12M_6L384, "s17m": S17M_6L384,
            "m50m": M50M_10L640, "m50m_1k": M50M_10L640_1K,
            "m52m": M52M_10L640, "m60m": M60M_10L640,
+           "pythia": PYTHIA_6L512,
            "l194m": L194M_14L1024,
            "l112m": L112M_14L768}
 
@@ -365,6 +366,14 @@ def main():
     ).to(device)
     model.train()
 
+    # === METRIC 1: Real parameter counts ===
+    total_params = sum(p.numel() for p in model.parameters())
+    embed_params = sum(p.numel() for n, p in model.named_parameters()
+                       if 'embedding' in n or 'emb' in n or 'lm_head' in n)
+    non_embed_params = total_params - embed_params
+    print(f"  params: {total_params:,} total ({total_params/1e6:.1f}M), "
+          f"{non_embed_params:,} non-embedding ({non_embed_params/1e6:.1f}M)")
+
     # 4070 Ti SUPER: tf32 + fused AdamW is the free speedup.
     if device.type == "cuda":
         torch.set_float32_matmul_precision("high")
@@ -520,6 +529,54 @@ def main():
         model.train()
         return total / batches
 
+    # === METRIC 2: Three-way eval (loader check) ===
+    # Buffer the last N training batches so we can re-score them at val time.
+    # If "served" loss is far below "random train" loss, we're recycling data.
+    SERVED_BUFFER_SIZE = 200  # keep last 200 micro-batches
+    served_buffer = []  # list of (x, y) tensors on CPU
+
+    @torch.no_grad()
+    def eval_three_way(train_data, val_data, served_buf, batches=20):
+        """Score: served batches, random train, and val. Returns (served, random_train, val)."""
+        model.eval()
+        # 1) Served: replay the last N batches the loader actually served
+        if served_buf:
+            s_total = 0.0
+            n = min(batches, len(served_buf))
+            indices = torch.randperm(len(served_buf))[:n]
+            for i in indices:
+                x, y = served_buf[i]
+                x, y = x.to(device), y.to(device)
+                with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                    s_total += F.cross_entropy(
+                        model(x).reshape(-1, cfg.vocab_size), y.reshape(-1)).item()
+            served_loss = s_total / n
+        else:
+            served_loss = float('nan')
+
+        # 2) Random train: fresh random samples from the train split
+        rt_total = 0.0
+        for _ in range(batches):
+            x, y = get_batch(train_data, args.batch, cfg.context_length,
+                             cfg.vocab_size, device, pos)
+            with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                rt_total += F.cross_entropy(
+                    model(x).reshape(-1, cfg.vocab_size), y.reshape(-1)).item()
+        random_train_loss = rt_total / batches
+
+        # 3) Val: held-out tail
+        v_total = 0.0
+        for _ in range(batches):
+            x, y = get_batch(val_data, args.batch, cfg.context_length,
+                             cfg.vocab_size, device, pos)
+            with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                v_total += F.cross_entropy(
+                    model(x).reshape(-1, cfg.vocab_size), y.reshape(-1)).item()
+        val_loss = v_total / batches
+
+        model.train()
+        return served_loss, random_train_loss, val_loss
+
     @torch.no_grad()
     def write_samples(step: int):
         # Fixed prompts + fixed seed = comparable across runs and steps.
@@ -585,6 +642,13 @@ def main():
         print(f"  early-stop ledger inherited: best_bpb={best_bpb:.4f} "
               f"strikes={bad_checks}")
 
+    # === METRIC 3: Throughput tracking ===
+    import time
+    throughput_start = time.monotonic()
+    throughput_tokens = 0  # accumulated over first 100 steps
+    THROUGHPUT_WINDOW = 100
+    throughput_reported = False
+
     for step in range(start_step + 1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
         for g in opt.param_groups:
@@ -604,6 +668,12 @@ def main():
                 loss = F.cross_entropy(logits.reshape(-1, cfg.vocab_size), y.reshape(-1)) / accum
             scaler.scale(loss).backward()
             micro_loss += loss.item()
+            # METRIC 2: buffer this micro-batch for three-way eval
+            if len(served_buffer) < SERVED_BUFFER_SIZE:
+                served_buffer.append((x.cpu(), y.cpu()))
+
+        # METRIC 3: throughput tracking
+        throughput_tokens += args.batch * accum * cfg.context_length
 
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -613,9 +683,18 @@ def main():
 
         # Val check on the held-out tail. All decisions use bits/byte.
         val, val_bpb, stop = None, None, False
+        served_loss, random_train_loss = None, None
         if val_corpus is not None and args.val_every and step % args.val_every == 0:
-            val = eval_loss(val_corpus)
+            # METRIC 2: three-way eval instead of just val
+            served_loss, random_train_loss, val = eval_three_way(
+                train_corpus if train_corpus is not None else corpus,
+                val_corpus, served_buffer, batches=20)
             val_bpb = val * bpb_factor
+            served_bpb = served_loss * bpb_factor if served_loss == served_loss else None  # nan check
+            random_train_bpb = random_train_loss * bpb_factor
+            print(f"  three-way: served={served_loss:.4f} "
+                  f"random_train={random_train_loss:.4f} val={val:.4f} "
+                  f"(bpb: {served_bpb:.4f} / {random_train_bpb:.4f} / {val_bpb:.4f})")
             if patience_checks > 0:
                 if val_bpb < best_bpb - args.min_delta:
                     # New best: snapshot it, reset strikes.
@@ -651,12 +730,32 @@ def main():
                               f"best={best_bpb:.4f} @ step {step}")
 
         running += (loss_val - running) / min(step, 50)
-        log_f.write(json.dumps({"step": step, "train": round(loss_val, 4),
-                                "avg50": round(running, 4),
-                                "val": round(val, 4) if val else None,
-                                "val_bpb": round(val_bpb, 5) if val_bpb else None,
-                                "lr": lr}) + "\n")
+        log_entry = {"step": step, "train": round(loss_val, 4),
+                     "avg50": round(running, 4),
+                     "val": round(val, 4) if val else None,
+                     "val_bpb": round(val_bpb, 5) if val_bpb else None,
+                     "lr": lr}
+        # METRIC 2: log three-way eval
+        if served_loss is not None:
+            log_entry["served"] = round(served_loss, 4)
+            log_entry["served_bpb"] = round(served_loss * bpb_factor, 5)
+            log_entry["random_train"] = round(random_train_loss, 4)
+            log_entry["random_train_bpb"] = round(random_train_loss * bpb_factor, 5)
+        log_f.write(json.dumps(log_entry) + "\n")
         log_f.flush()   # a watcher should see steps appear, not wait for 4KB
+
+        # METRIC 3: throughput report after first THROUGHPUT_WINDOW steps
+        if not throughput_reported and step >= THROUGHPUT_WINDOW:
+            elapsed = time.monotonic() - throughput_start
+            tok_per_sec = throughput_tokens / elapsed
+            remaining_budget = 7 * 3600  # 7 hours in seconds
+            estimated_tokens = tok_per_sec * remaining_budget
+            print(f"\n  === THROUGHPUT (first {THROUGHPUT_WINDOW} steps) ===")
+            print(f"  {tok_per_sec:,.0f} tokens/sec")
+            print(f"  7-hour budget: ~{estimated_tokens/1e9:.2f}B tokens")
+            print(f"  Steps to 1B tokens: ~{1e9 / tok_per_sec:,.0f}")
+            print(f"  ===\n")
+            throughput_reported = True
         if step % 25 == 0 or step == 1:
             vstr = f" val={val:.4f} bpb={val_bpb:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "

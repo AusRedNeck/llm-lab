@@ -145,3 +145,14 @@ L112M_14L768 = ModelConfig(
     num_heads=24,         # 32 dims per head, clean
     dropout=0.1,
 )
+
+# Pythia-scaled: 6L × 512H × 8 heads × FFN 2048. ~52M @ 16k vocab.
+# Reference: EleutherAI/pythia-70m uses the same arch (6/512/8/2048).
+PYTHIA_6L512 = ModelConfig(
+    vocab_size=16256,     # overridden from bpe_owt16k at runtime
+    context_length=512,
+    embedding_dim=512,
+    num_layers=6,
+    num_heads=8,
+    dropout=0.1,
+)
