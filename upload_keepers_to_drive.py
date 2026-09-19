@@ -36,6 +36,10 @@ def in_drive(name):
 def main():
     dry = "--dry-run" in sys.argv
     files = sorted(glob.glob(os.path.join(KEEPERS_DIR, "*.pt")))
+    # LARGEST FIRST. Biggest here means most valuable: the 845 MB m50m bests (including the
+    # record run) would otherwise upload dead last on alphabetical order, so a failure late in
+    # the run would leave the crown-jewel checkpoints with no off-machine copy.
+    files.sort(key=os.path.getsize, reverse=True)
     total = sum(os.path.getsize(f) for f in files)
     print(f"keepers: {len(files)} files, {total/1e9:.2f} GB -> Drive folder {FOLDER}", flush=True)
     results = json.load(open(OUT, encoding="utf-8")) if os.path.exists(OUT) else {}
