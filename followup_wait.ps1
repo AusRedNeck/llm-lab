@@ -32,16 +32,15 @@ while ($true) {
 Write-Marker "encode finished and no workers alive; starting gap-fill pass"
 Set-Location $root
 
-# Second pass: plan from parts on disk, fill the gap, merge, verify.
-& python -u tokenize_owt_16k.py --workers 8 --status-every 60 *>> (Join-Path $root 'logs\16k_tokenize_followup.log')
+# Redirect through cmd: PowerShell 5.1's *>> writes UTF-16, which makes the
+# captured evidence painful to read later.
+$runlog = Join-Path $root 'logs\16k_tokenize_followup.log'
+cmd /c "python -u tokenize_owt_16k.py --workers 8 --status-every 60 >> `"$runlog`" 2>&1"
 $rc = $LASTEXITCODE
 Write-Marker "encode pass exited $rc"
 
 if ($rc -eq 0) {
-    & python -u verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin `
-        --vocab data/bpe_owt16k.json `
-        --src data/openwebtext/shards/train-00000-of-00080.txt `
-        --manifest *>> (Join-Path $root 'logs\16k_tokenize_followup.log')
+    cmd /c "python -u verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin --vocab data/bpe_owt16k.json --src data/openwebtext/shards/train-00000-of-00080.txt --manifest >> `"$runlog`" 2>&1"
     $vrc = $LASTEXITCODE
     if ($vrc -eq 0) {
         Write-Marker "VERIFIED OK - corpus complete and 7/7 checks green"

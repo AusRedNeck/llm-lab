@@ -11,3 +11,4 @@ runs/
 .hermes/
 train_job.state.json
 *.out
+logs/

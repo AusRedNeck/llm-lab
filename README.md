@@ -208,6 +208,53 @@ trap (`cmd //c foo.bat` silently does nothing; use
 is the CUDA venv; `llm-lab/.venv` is CPU-only torch and will train 50x slower
 without ever looking wrong).
 
+### 011c — finished. best bpb 1.5854; and the run proves the guard works
+
+**Result:** best **bpb 1.5854** (val 4.4418) at **step 5500** — 90M tokens, **0.93% of the
+9.65B-token corpus**. That is the best byte-normalised number on record:
+
+| run | vocab | best bpb |
+|-----|-------|----------|
+| 010 | 4k    | 1.7596   |
+| 011 | 16k   | 1.7271   |
+| 011b| 16k   | 1.7013   |
+| **011c** | **16k** | **1.5854** |
+
+So 16k/OWT is the right line, and the gap to 4k is now ~10%, not the 1.8% the first
+comparison suggested.
+
+**It ended by its own rule, correctly.** At step 8200 the degrade guard fired:
+`abort: bpb 2.0975 > best 1.5854 +30% (mid-schedule)`. That is not a crash — the
+trainer exits 0 and writes `{"early_stop": true}` into the curve. The val series shows a
+*relentless* climb, not a wobble:
+
+| step | bpb | % over best |
+|------|-----|-------------|
+| 6900 | 1.8599 | +17.3% |
+| 7700 | 2.0181 | +27.3% |
+| 8200 | 2.0975 | **+32.3%** |
+
+Consecutive check-to-check noise across the whole run: median **1.03%**, p90 3.05%, max
+3.75%. A 14-check monotonic climb of 15 points is nowhere near that band, so the abort was
+right — arguably late.
+
+**Two conclusions, one of them about schedule length.**
+1. **The knee is ~5,500 steps, i.e. 27% of the planned 20k.** This regime overfits at
+   ~1% corpus coverage; the remaining 11,800 steps would have produced nothing. The 20k
+   schedule was ~3.7x too long for m50m/OWT-16k at this LR.
+2. **A patience rule cannot catch overfitting.** It fires on *flat* val; when val is
+   climbing you need the degrade guard. Next run: `--degrade-frac 0.15` — still ~4x the
+   measured noise ceiling (~3.75%), and it would have stopped this run ~2,700 steps earlier.
+
+**Operational notes worth keeping.** The run had been killed mid-flight at step 5170 by an
+app restart (it was a child of the Hermes app process tree) and was resumed from its own
+step-5000 checkpoint with weights + optimizer + step intact — the resume also inherited the
+early-stop ledger and the run identity, so the curve stayed one continuous file
+(`train/train.py`, commit `3689d12`). The supervisor's watchdog initially would have
+RELAUNCHED this finished run (it only understood "complete" as "reached target"); it now
+treats the `early_stop` record or the `done. final` line as a deliberate end (commit
+`552f55c`).
+
 ## Current state (2026-09-18) — read this first, it's the handoff
 
 **16k OWT corpus — DONE (2026-09-18 15:11, unattended):** 9,745,672,850 tokens
@@ -238,10 +285,21 @@ Rerun by hand:   `run_16k_full_par.bat`   (resumable — finished shards are ski
 Verify:          `python verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin --vocab data/bpe_owt16k.json --src data/openwebtext/shards/train-00000-of-00080.txt --manifest`
 Tests:           `python -m pytest tests/test_tokenizer_safety.py tests/test_bpe_resilience.py -q`  (16 tests)
 
-**Next: exp 011 training** — m50m, 20k steps, `--patience 10 --min_delta 0.001`,
-training off the memmapped `.bin` (never a 38GB `.pt` — that's how run 010 died at
-step ~17k). Measured 0.4s/step → ~2.2h. Hypothesis: 16k vocab gives the embedding
-more resolution than 4k did (exp 010 best val 4.0986 @ step 2600, then overfit).
+**exp 011 line — DONE (2026-09-18 20:43): best bpb 1.5854 @ step 5500, guard fired at
+step 8200** (see the 011c section above). The line's question is answered: 16k beats 4k by
+~10% byte-normalised, and the model overfits at ~1% corpus coverage, so the knee is ~5,500
+steps and a 20k schedule is ~3.7x longer than this regime can use.
+
+**Next levers (the overfit finding points away from "more steps"):** the constraint at 0.93%
+coverage is generalisation, not budget — so the next experiments are about per-step data
+diversity and regularisation (dropout is already wired), and about a `--degrade-frac 0.15`
+guard so an overfitting run stops near its knee instead of 2,700 steps past it.
+
+**Disk / retention (was the next wall, now handled):** 338 ckpts / 181 GB became **87 files
+/ 35 GB** — `prune_checkpoints.py` keeps every `_best.pt`, the run's last step-ckpt, and
+every 5000th step; it freed **143.7 GB** (D: 540 → 667 GB free) and refuses to run if any
+keeper lacks a verified copy. The 18 keepers (6.70 GB) are now in three places: the working
+dir, `llm-lab-private/checkpoints/keepers/`, a second physical SSD, and Google Drive.
 
 **Curated corpora on disk** (~149GB, fetched 2026-09-18, don't re-download):
 `data/cosmopedia/` (336 parquet, 86 GiB), `data/finewiki/` (15 parquet, 36 GiB, en
