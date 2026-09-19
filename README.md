@@ -298,8 +298,39 @@ guard so an overfitting run stops near its knee instead of 2,700 steps past it.
 **Disk / retention (was the next wall, now handled):** 338 ckpts / 181 GB became **87 files
 / 35 GB** — `prune_checkpoints.py` keeps every `_best.pt`, the run's last step-ckpt, and
 every 5000th step; it freed **143.7 GB** (D: 540 → 667 GB free) and refuses to run if any
-keeper lacks a verified copy. The 18 keepers (6.70 GB) are now in three places: the working
-dir, `llm-lab-private/checkpoints/keepers/`, a second physical SSD, and Google Drive.
+keeper lacks a verified copy.
+
+**Keeper backups — finally OFF-machine:** the 18 keepers (6.70 GB) now exist in four places:
+the working dir, `llm-lab-private/checkpoints/keepers/`, a second physical SSD, and — the
+one that survives the machine being lost — **Google Drive** (`llm-lab keepers`). The first
+Drive attempt hit `storageQuotaExceeded` on the 16 GB free tier; the account has since moved
+to 100 GB. Worth knowing what was actually filling it: not the keepers (5.07 GB) but **7.35 GB
+of two `lmu_session_*.jsonl` telemetry files** plus 1.27 GB of a retokenized corpus cache that
+already exists locally. Off-machine also means the upload order matters — see below.
+
+### Data integrity audit — 0 errors, and three findings that only LOOK like corruption
+
+`audit_run_data.py` (new) checks curve integrity, run identity, checkpoint/step agreement,
+keeper hashes and hygiene across the whole lab: **31 run dirs, 31 curves, 87 checkpoints in
+39 families, 18/18 keeper hashes verified — 0 errors, 7 warnings.**
+
+The seven warnings are honest ones, and getting to them required fixing the *audit* three
+times, because each of these is expected behaviour that a naive check reports as damage:
+
+| looks like | actually is |
+|---|---|
+| duplicate steps + schema drift on 7 runs | the `early_stop` **summary row**, which deliberately reuses the final step number. Exclude it from the data set and validate it separately. |
+| 37 "orphan" checkpoints | run dirs are stamped `YYYYMMDD_HHMM`; checkpoint families `YYYYMMDDHHMM`. Compare digits, not strings. |
+| 16 errors on 9 runs | **abandoned stubs** — 0-byte or header-only curves from the failing dense111m/194m attempts. Parked in `runs/_abandoned_stubs_2026-09-15/` (6 KB, nothing lost). |
+
+What remains is real and worth knowing: **6 checkpoint families have weights but no run dir
+anywhere** (the Sep 5/11/13 bpe2k + libri10m runs — their curves live on the Mac or in Drive,
+not here), and **1 stamp-drift case** where one logical run carries two stamps
+(`..._202609181300` family vs the `20260918_1307` run dir — 7 minutes apart). That drift is
+exactly why the resume-continuity fix persists the run stamp in every checkpoint.
+
+An audit that cries wolf gets ignored, so each check now separates expected variation from
+real damage.
 
 **Curated corpora on disk** (~149GB, fetched 2026-09-18, don't re-download):
 `data/cosmopedia/` (336 parquet, 86 GiB), `data/finewiki/` (15 parquet, 36 GiB, en
