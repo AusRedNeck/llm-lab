@@ -104,6 +104,35 @@ def stuck_note(spec, st, step, now):
     return None
 
 
+def run_finished(spec):
+    """True when the RUN ITSELF ended deliberately: its early-stop guard fired, or the
+    trainer printed its completion line. This is a legitimate end state, NOT a crash --
+    treating it as 'dead' makes the watchdog relaunch a finished run, which then aborts
+    again (observed live 2026-09-18: the degrade guard fired at step 8200/20000)."""
+    run_dir = os.path.join(LAB, "runs", spec["run_name"])
+    lj = os.path.join(run_dir, "loss.jsonl")
+    if os.path.exists(lj):
+        try:
+            with open(lj, "rb") as f:
+                f.seek(max(0, os.path.getsize(lj) - 65536))
+                tail = f.read().decode("utf-8", "replace")
+            if '"early_stop": true' in tail:
+                return True, "early-stop guard fired"
+        except Exception:
+            pass
+    log = os.path.join(LAB, spec["log"])
+    if os.path.exists(log):
+        try:
+            with open(log, "rb") as f:
+                f.seek(max(0, os.path.getsize(log) - 8192))
+                tail = f.read().decode("utf-8", "replace")
+            if "done. final" in tail:
+                return True, "trainer printed 'done.'"
+        except Exception:
+            pass
+    return False, ""
+
+
 def progress_step(spec):
     """Newest step the run has actually reached: loss.jsonl first, ckpt step second."""
     run_dir = os.path.join(LAB, "runs", spec["run_name"])
@@ -170,6 +199,25 @@ def main():
 
     step = progress_step(spec)
     target = spec["target_steps"]
+
+    # A run that ended BY ITS OWN RULE (early-stop / degrade guard) is finished, not dead.
+    # Without this the watchdog relaunches it, the guard fires again, and it burns the
+    # restart budget on a completed run -- observed live 2026-09-18, step 8200/20000.
+    finished, why = run_finished(spec)
+    if finished:
+        first_time = not spec.get("completed")
+        if not dry and first_time:
+            st.update({"status": "stopped-by-rule", "final_step": step, "reason": why,
+                       "checked_at": now.isoformat(timespec="seconds")})
+            save_state(st, STATE)
+            spec["completed"] = True
+            with open(spec_path, "w", encoding="utf-8") as f:
+                json.dump(spec, f, indent=2)
+        if first_time and not quiet:
+            print(f"[watchdog] {spec['name']} ENDED BY ITS OWN RULE at step {step}/{target} "
+                  f"({why}) - no relaunch")
+        return 0
+
     if step is not None and step >= target:
         if not dry:
             st.update({"status": "complete", "final_step": step, "completed": True,
