@@ -49,7 +49,15 @@ PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        try:
+            # is_available() can be True while no usable device is exposed (an empty
+            # CUDA_VISIBLE_DEVICES does this): commit to CUDA only after probing it, or
+            # every later cuda call raises 'Invalid device id' during startup. A run that
+            # dies before step 1 is the worst case for an unattended supervisor.
+            torch.cuda.get_device_properties(torch.cuda.current_device())
+            return torch.device("cuda")
+        except Exception as e:  # noqa: BLE001
+            print(f"CUDA reported available but is unusable ({e}); falling back to CPU")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
@@ -367,6 +375,20 @@ def main():
     # Resume: weights + optimizer back, step counter continues to --steps.
     # Shape mismatch (e.g. ctx/vocab change) fails loud, not silent.
     start_step = 0
+    # Continuity across restarts (added 2026-09-18 after exp011c was killed by an app
+    # restart). Weights+optimizer+step were already restored, but three things were NOT,
+    # and each one gets worse the longer the run is:
+    #   * best_bpb/bad_checks -- the early-stop ledger. Reset to inf on every resume, so a
+    #     long run that restarts repeatedly silently loses its divergence guard.
+    #   * the run stamp in checkpoint filenames -- a resumed run minted a NEW stamp, so one
+    #     logical run scattered across several ckpt families and "newest ckpt" became
+    #     ambiguous (this is what a supervisor needs to find).
+    #   * the run dir -- the loss curve for one logical run got split across run dirs.
+    import re
+    resume_best_bpb = None
+    resume_bad_checks = 0
+    resume_stamp = None
+    resume_run_name = None
     if args.resume:
         r = torch.load(args.resume, map_location=device, weights_only=False)
         rc = r["cfg"]
@@ -380,7 +402,21 @@ def main():
         if "optimizer" in r:
             opt.load_state_dict(r["optimizer"])
         start_step = int(r.get("step", 0))
-        print(f"resumed {args.resume} @ step {start_step}")
+        # Inherit the ledger (new ckpts carry best_bpb; older _best.pt carries val_bpb).
+        if r.get("best_bpb") is not None:
+            resume_best_bpb = float(r["best_bpb"])
+        elif r.get("val_bpb"):
+            resume_best_bpb = float(r["val_bpb"])
+        resume_bad_checks = int(r.get("bad_checks") or 0)
+        # Inherit the run identity from the filename stamp and/or the saved run_name.
+        _m = re.search(r"_(\d{12})_", os.path.basename(args.resume))
+        resume_stamp = _m.group(1) if _m else None
+        resume_run_name = r.get("run_name")
+        _ledger = (f"best_bpb={resume_best_bpb:.4f} bad_checks={resume_bad_checks}"
+                   if resume_best_bpb else
+                   "best_bpb NOT in ckpt (guard baseline will restart)")
+        print(f"resumed {args.resume} @ step {start_step} | {_ledger}"
+              f" | stamp={resume_stamp} run={resume_run_name}")
 
     corpus = None
     train_corpus, val_corpus = None, None
@@ -432,20 +468,40 @@ def main():
         # Run dir says which vocab it trained on: bpe2k_rope, not just rope.
         tag += "_" + os.path.splitext(os.path.basename(args.tokenizer))[0]
     run_name = f"{datetime.datetime.now():%Y%m%d_%H%M}_{tag}_{corpus_label}"
-    run_stamp = run_name.split("_")[0] + run_name.split("_")[1]
+    # A resumed run keeps the ORIGINAL identity: same ckpt stamp and same run dir, so one
+    # logical run stays one family of checkpoints (what a supervisor must find) and one
+    # continuous loss curve (what analysis reads). Appending rather than truncating is what
+    # makes an interrupted run's curve readable end-to-end; the header is only written once.
+    reuse_run = bool(resume_run_name) and os.path.isdir(os.path.join(args.run_dir, resume_run_name))
+    if reuse_run:
+        run_name = resume_run_name
+    run_stamp = resume_stamp or (run_name.split("_")[0] + run_name.split("_")[1])
     run_path = os.path.join(args.run_dir, run_name)
     os.makedirs(os.path.join(run_path, "samples"), exist_ok=True)
-    log_f = open(os.path.join(run_path, "loss.jsonl"), "w")
-    json.dump({"args": vars(args), "cfg": vars(cfg), "params_m": cfg.num_params() / 1e6},
-              log_f)
-    log_f.write("\n")
-    print(f"  run dir: {run_path}")
+    log_path = os.path.join(run_path, "loss.jsonl")
+    fresh = (not reuse_run) or not os.path.exists(log_path) or os.path.getsize(log_path) == 0
+    log_f = open(log_path, "a" if reuse_run else "w")
+    if fresh:
+        json.dump({"args": vars(args), "cfg": vars(cfg), "params_m": cfg.num_params() / 1e6},
+                  log_f)
+        log_f.write("\n")
+    print(f"  run dir: {run_path}{' (resumed - appending)' if reuse_run else ''}")
 
     # AMP: mixed-precision forward (fp16/bf16) + fp32 gradients.
     # Free speedup on CUDA — ~1.5-2x throughput, negligible quality impact.
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    autocast_dtype = torch.bfloat16 if use_amp and torch.cuda.is_bf16_supported() else torch.float16
+    # bf16 probe is guarded: it touches the CUDA driver and can raise on an odd context,
+    # which would kill the run before step 1.
+    if use_amp:
+        try:
+            _bf16 = torch.cuda.is_bf16_supported()
+        except Exception as e:  # noqa: BLE001
+            print(f"  bf16 probe failed ({e}); using fp16 autocast")
+            _bf16 = False
+    else:
+        _bf16 = False
+    autocast_dtype = torch.bfloat16 if _bf16 else torch.float16
     accum = args.accum
     if accum > 1:
         print(f"  gradient accumulation: {accum} micro-batches, effective batch = {args.batch * accum}")
@@ -520,7 +576,13 @@ def main():
               f"abort early if bpb > best x {1 + args.degrade_frac:.2f}")
 
     # Early-stop ledger: best BITS/BYTE seen, strikes since, stop flag.
+    # A resumed run INHERITS this ledger: it used to reset to inf on every resume, so a
+    # long run that restarted repeatedly lost its divergence guard each time.
     best_bpb, bad_checks = float("inf"), 0
+    if resume_best_bpb:
+        best_bpb, bad_checks = resume_best_bpb, resume_bad_checks
+        print(f"  early-stop ledger inherited: best_bpb={best_bpb:.4f} "
+              f"strikes={bad_checks}")
 
     for step in range(start_step + 1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
@@ -567,7 +629,9 @@ def main():
                     saved_best["bytes_per_token"] = bpt
                     torch.save({"cfg": saved_best, "model": model.state_dict(),
                                 "optimizer": opt.state_dict(),
-                                "step": step, "val": val, "val_bpb": val_bpb},
+                                "step": step, "val": val, "val_bpb": val_bpb,
+                                "best_bpb": val_bpb, "bad_checks": bad_checks,
+                                "run_name": os.path.basename(run_path)},
                                best_ckpt)
                     print(f"  new best bpb={val_bpb:.4f} (val={val:.4f}) -> {best_ckpt}")
                 else:
@@ -606,7 +670,13 @@ def main():
             saved_cfg["corpus"] = args.corpus or args.data
             torch.save({"cfg": saved_cfg, "model": model.state_dict(),
                         "optimizer": opt.state_dict(),
-                        "step": step}, ckpt)
+                        "step": step,
+                        # Continuity fields: a supervisor reads run_name/stamp to find the
+                        # newest checkpoint of THIS logical run, and the trainer restores
+                        # the ledger on resume.
+                        "best_bpb": None if best_bpb == float("inf") else best_bpb,
+                        "bad_checks": bad_checks,
+                        "run_name": os.path.basename(run_path)}, ckpt)
             print(f"  saved {ckpt}")
             write_samples(step)
         if stop:

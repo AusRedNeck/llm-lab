@@ -9,3 +9,5 @@ runs/
 .env
 *.log
 .hermes/
+train_job.state.json
+*.out
