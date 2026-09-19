@@ -3,7 +3,7 @@
   "desc": "PROBE B: m50m RoPE BPE16k full OWT dropout 0.1, accum 2 (effective batch 64). 8k steps.",
   "ckpt_dir": "checkpoints",
   "stamp": "",
-  "run_name": "20260919_1059_m50m_rope_bpe_owt16k_openwebtext_combined",
+  "run_name": "PENDING_FIRST_LAUNCH_exp012b",
   "target_steps": 8000,
   "python": "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe",
   "train_args": [
@@ -41,5 +41,5 @@
   "log": "logs/exp012b_supervised.log",
   "max_restarts": 6,
   "min_progress_steps": 25,
-  "completed": true
+  "completed": false
 }

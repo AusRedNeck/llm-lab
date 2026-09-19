@@ -93,6 +93,18 @@ M50M_10L640 = ModelConfig(
     dropout=0.1,
 )
 
+# 1024-context variant: same m50m trunk, doubled context window.
+# Params barely change (+0.6M for positional embeddings).
+# Tests whether longer context unlocks better generalization.
+M50M_10L640_1K = ModelConfig(
+    vocab_size=4512,      # overridden from bpe_owt16k at runtime
+    context_length=1024,  # doubled from 512
+    embedding_dim=640,
+    num_layers=10,
+    num_heads=10,
+    dropout=0.1,
+)
+
 M52M_10L640 = ModelConfig(
     vocab_size=2256,      # overridden from bpe2k file at runtime
     context_length=256,   # stories are short — 256 holds plenty

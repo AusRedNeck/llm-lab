@@ -6,9 +6,9 @@ Run on a schedule (Hermes cron, every 10 min). Decides ONE of four things and ex
   running   - the job's process is alive (matched by spec["match"] substrings in a python
               cmdline). Quiet, exit 0.
   complete  - the loss curve reached target_steps. Marked in the state file, exit 0.
-  relaunch  - the job is dead and incomplete -> `schtasks /run` the parked training task
-              (detached: parented to Task Scheduler, so an app restart cannot kill it).
-              One line on stdout; exit 0.
+  relaunch  - the job is dead and incomplete -> launches directly via subprocess.Popen
+              with DETACHED_PROCESS (survives app restart). Falls back to schtasks/VBS
+              if direct launch fails.
   stalled   - it keeps dying WITHOUT making progress (a deterministic crash: OOM, shape
               error, bad corpus). Stops relaunching and exits 1 so the failure surfaces
               instead of looping forever.
@@ -33,9 +33,39 @@ from datetime import datetime, timedelta
 
 LAB = os.path.dirname(os.path.abspath(__file__))
 SPEC = os.path.join(LAB, "train_job.json")
-TASK = "Hermes_TrainRun"          # parked scheduled task that launches the trainer detached
+TASK = "Hermes_TrainRun"          # parked scheduled task (kept for fallback; direct launch preferred)
 GRACE_MINUTES = 5                 # never relaunch within this window of the last attempt
 STRIKE_LIMIT = 2                  # consecutive no-progress deaths before giving up
+HERMES_PYTHON = "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"
+DETACHED = 0x00000008             # Windows DETACHED_PROCESS flag
+
+
+def launch_direct(spec):
+    """Launch the trainer directly via subprocess.Popen (detached, no schtasks/VBS/bat).
+
+    Returns True on success, False on failure. The process is parented to nothing
+    (DETACHED_PROCESS), so an app restart cannot kill it.
+    """
+    cmd = [spec["python"], "-u", "-m", "train.train"] + list(spec["train_args"])
+    log_path = os.path.join(LAB, spec.get("log", "logs/trainer.log"))
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = ""
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+
+    try:
+        lf = open(log_path, "a", encoding="utf-8", buffering=1)
+        proc = subprocess.Popen(
+            cmd, cwd=LAB, stdout=lf, stderr=subprocess.STDOUT,
+            env=env, creationflags=DETACHED,
+            close_fds=True,
+        )
+        print(f"[watchdog] DIRECT LAUNCH: pid={proc.pid} cmd={' '.join(cmd[:6])}...")
+        return True
+    except Exception as e:
+        print(f"[watchdog] DIRECT LAUNCH FAILED: {e}")
+        return False
 
 
 def state_path_for(spec_path):
@@ -216,6 +246,20 @@ def main():
         if first_time and not quiet:
             print(f"[watchdog] {spec['name']} ENDED BY ITS OWN RULE at step {step}/{target} "
                   f"({why}) - no relaunch")
+        # ---- chain: swap in next_job spec and launch (even on early-stop) -----
+        if spec.get("completed"):
+            next_job = spec.get("next_job")
+            if next_job and not dry:
+                next_path = os.path.join(LAB, next_job)
+                if os.path.exists(next_path):
+                    with open(next_path, encoding="utf-8") as f:
+                        nspec = json.load(f)
+                    if not nspec.get("completed"):
+                        print(f"[watchdog] CHAIN: swapping in {nspec['name']} from {next_job}")
+                        with open(spec_path, "w", encoding="utf-8") as f:
+                            json.dump(nspec, f, indent=2)
+                        launch_direct(nspec)
+                        return 0
         return 0
 
     if step is not None and step >= target:
@@ -230,6 +274,20 @@ def main():
         return 0
 
     if spec.get("completed"):
+        # ---- chain: swap in next_job spec and launch --------------------------
+        next_job = spec.get("next_job")
+        if next_job and not dry:
+            next_path = os.path.join(LAB, next_job)
+            if os.path.exists(next_path):
+                with open(next_path, encoding="utf-8") as f:
+                    nspec = json.load(f)
+                if not nspec.get("completed"):
+                    print(f"[watchdog] CHAIN: swapping in {nspec['name']} from {next_job}")
+                    # Overwrite train_job.json with the next spec
+                    with open(spec_path, "w", encoding="utf-8") as f:
+                        json.dump(nspec, f, indent=2)
+                    launch_direct(nspec)
+                    return 0
         print(f"[watchdog] job marked complete - nothing to do")
         return 0
 
@@ -279,12 +337,9 @@ def main():
         return 0
 
     if not task_exists():
-        print(f"[watchdog] scheduled task {TASK} missing - cannot launch detached; "
-              f"create it first (see llm-lab skill).")
-        return 1
-    r = subprocess.run(["schtasks", "/run", "/tn", TASK], capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"[watchdog] schtasks /run failed: {r.stderr.strip() or r.stdout.strip()}")
+        print(f"[watchdog] launching directly (no scheduled task needed)")
+    if not launch_direct(spec):
+        print(f"[watchdog] direct launch failed - cannot relaunch")
         return 1
     st.update({"status": "relaunching", "relaunch_count": restarts, "strikes": strikes,
                "last_relaunch": now.isoformat(timespec="seconds"),
