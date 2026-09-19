@@ -72,8 +72,10 @@ After LR sweep picks the winner:
 - torch.compile
 - Pre-tokenized memmapped shards (already done)
 
-### Throughput Estimate
-- 4070 Ti Super: ~40-60k tokens/sec (bf16, small model)
-- 8 hours ≈ 1-1.5B tokens
-- That's 2-3× the Chinchilla budget for this model size
-- Every batch can be fresh data (no recycling needed at this scale)
+### Throughput Safeguards (from Claude, 2026-09-19)
+- **Confirm throughput holds 10+ min** — step-100 reading doesn't show thermal throttling
+- **Loader not cleared until ~45M tokens** (~step 700 at 64 seq/step). Clean evals at 100 are just pipeline validation.
+- **Tripwire**: if served loss >0.3 nats below random_train, stop — data recycling detected
+- **Check at steps 700, 1000, 2000** — these are the real loader tests
+- **LR sweep first** (6e-4, 1e-3, 1.5e-3, warmup 800) — bad LR costs a whole night
+- **Plan A recommended**: 1B tokens baseline (15k steps, 3.5h) + LR sweep + first rung up. Plan B (2B overnight) risks a full night on suboptimal LR.

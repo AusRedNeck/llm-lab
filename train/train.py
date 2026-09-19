@@ -644,10 +644,13 @@ def main():
 
     # === METRIC 3: Throughput tracking ===
     import time
-    throughput_start = time.monotonic()
-    throughput_tokens = 0  # accumulated over first 100 steps
-    THROUGHPUT_WINDOW = 100
+    throughput_start = None  # start after warmup
+    throughput_tokens = 0
+    THROUGHPUT_WARMUP = 30  # skip first N steps (torch.compile + CUDA warmup)
+    THROUGHPUT_WINDOW = 100  # measure this many steps after warmup
     throughput_reported = False
+    peak_mem_mb = 0
+    peak_temp = 0
 
     for step in range(start_step + 1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
@@ -674,6 +677,9 @@ def main():
 
         # METRIC 3: throughput tracking
         throughput_tokens += args.batch * accum * cfg.context_length
+        if step == THROUGHPUT_WARMUP:
+            throughput_start = time.monotonic()
+            throughput_tokens = 0  # reset after warmup
 
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -695,6 +701,12 @@ def main():
             print(f"  three-way: served={served_loss:.4f} "
                   f"random_train={random_train_loss:.4f} val={val:.4f} "
                   f"(bpb: {served_bpb:.4f} / {random_train_bpb:.4f} / {val_bpb:.4f})")
+            # TRIPWIRE: data recycling detection
+            if served_loss < random_train_loss - 0.3:
+                print(f"\n  !!! DATA RECYCLING DETECTED !!!")
+                print(f"  served={served_loss:.4f} < random_train={random_train_loss:.4f} - 0.3")
+                print(f"  Stopping. The loader is recycling data.")
+                stop = True
             if patience_checks > 0:
                 if val_bpb < best_bpb - args.min_delta:
                     # New best: snapshot it, reset strikes.
@@ -744,18 +756,26 @@ def main():
         log_f.write(json.dumps(log_entry) + "\n")
         log_f.flush()   # a watcher should see steps appear, not wait for 4KB
 
-        # METRIC 3: throughput report after first THROUGHPUT_WINDOW steps
-        if not throughput_reported and step >= THROUGHPUT_WINDOW:
-            elapsed = time.monotonic() - throughput_start
-            tok_per_sec = throughput_tokens / elapsed
-            remaining_budget = 7 * 3600  # 7 hours in seconds
-            estimated_tokens = tok_per_sec * remaining_budget
-            print(f"\n  === THROUGHPUT (first {THROUGHPUT_WINDOW} steps) ===")
-            print(f"  {tok_per_sec:,.0f} tokens/sec")
-            print(f"  7-hour budget: ~{estimated_tokens/1e9:.2f}B tokens")
-            print(f"  Steps to 1B tokens: ~{1e9 / tok_per_sec:,.0f}")
-            print(f"  ===\n")
-            throughput_reported = True
+        # METRIC 3: throughput report after measuring THROUGHPUT_WINDOW steps
+        if throughput_start and not throughput_reported:
+            if step >= THROUGHPUT_WARMUP + THROUGHPUT_WINDOW:
+                elapsed = time.monotonic() - throughput_start
+                tok_per_sec = throughput_tokens / elapsed
+                remaining_budget = 7 * 3600
+                estimated_tokens = tok_per_sec * remaining_budget
+                # GPU stats
+                if device.type == "cuda":
+                    mem_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    temp = torch.cuda.temperature() if hasattr(torch.cuda, 'temperature') else 0
+                    print(f"\n  === THROUGHPUT (steps {THROUGHPUT_WARMUP+1}-{THROUGHPUT_WARMUP+THROUGHPUT_WINDOW}) ===")
+                    print(f"  {tok_per_sec:,.0f} tokens/sec")
+                    print(f"  7-hour budget: ~{estimated_tokens/1e9:.2f}B tokens")
+                    print(f"  Steps to 1B: ~{1e9 / tok_per_sec:,.0f}")
+                    print(f"  Peak GPU mem: {mem_mb:,.0f}MB / 16376MB")
+                    print(f"  ===\n")
+                else:
+                    print(f"\n  === THROUGHPUT === {tok_per_sec:,.0f} tok/s ===\n")
+                throughput_reported = True
         if step % 25 == 0 or step == 1:
             vstr = f" val={val:.4f} bpb={val_bpb:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
