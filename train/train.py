@@ -170,6 +170,25 @@ def split_corpus(corpus: torch.Tensor, val_frac: float,
     return train, val
 
 
+def val_bytes_per_token(val_data, tok, sample: int = 200_000) -> float:
+    """Source bytes per token — the constant that makes loss comparable.
+
+    Per-token cross-entropy is NOT comparable between tokenizers. A 16k BPE
+    splits the same text into fewer, more informative tokens, so its per-token
+    loss is mechanically higher at identical compression quality. Exp 010 vs
+    011 is the worked example: the raw gap said "16k is 18.6% worse", and the
+    byte-normalised gap said 16k is 1.8% BETTER. bits/byte = nats/ln(2) / bpt.
+    """
+    if tok is None:
+        return 1.0                      # byte tokenizer: 1 token == 1 byte
+    ids = [int(i) for i in val_data[:sample].tolist()]
+    if not ids:
+        return 1.0
+    text = tok.decode(ids)
+    nbytes = len(text.encode("utf-8", errors="ignore"))
+    return nbytes / len(ids) if nbytes else 1.0
+
+
 def load_tinystories(ctx: int, device, cache="data/TinyStories.txt") -> torch.Tensor | None:
     """Download TinyStories once, cache as raw text, return byte-encoded tensor."""
     if not os.path.exists(cache):
@@ -280,7 +299,29 @@ def main():
     ap.add_argument("--patience", type=int, default=0,
                     help="val checks without improvement before stopping (0 = off)")
     ap.add_argument("--min_delta", type=float, default=1e-4,
-                    help="val must beat best by this much to reset patience")
+                    help="val must beat best by this much to reset patience "
+                         "(now applied to bits/byte, not per-token loss)")
+    ap.add_argument("--patience-frac", type=float, default=0.0,
+                    help="plateau patience as a FRACTION of --steps (e.g. 0.10 = "
+                         "2000 steps at 20k). Preferred over --patience: a check "
+                         "count silently depends on --val_every, so 10 checks was "
+                         "only 1000 steps and killed exp 011 at 15%% of schedule. "
+                         "0 = fall back to --patience")
+    ap.add_argument("--min-steps-frac", type=float, default=0.0,
+                    help="no plateau-based early stop before this fraction of the "
+                         "schedule (e.g. 0.5). Mid-schedule a flat val is the LR "
+                         "still being high, not convergence. A real climb still "
+                         "aborts -- see --degrade-frac")
+    ap.add_argument("--degrade-frac", type=float, default=0.30,
+                    help="before min-steps-frac, abort anyway if val exceeds best "
+                         "by this fraction (catches genuine overfit/divergence). "
+                         "CALIBRATE THIS FROM THE VAL NOISE BAND, not by feel: on "
+                         "the m50m/OWT runs, val swings a median 5.2%% and up to "
+                         "10.4%% between consecutive checks, with excursions up to "
+                         "5.0%% above the running best purely from noise, while real "
+                         "memorisation (exp 010) was +143%%. A 0.05 threshold sits "
+                         "INSIDE the noise band and aborts a healthy run -- keep it "
+                         "well clear of the noise (default 0.30)")
     ap.add_argument("--run_dir", default="runs",
                     help="loss.jsonl + samples land here per run")
     ap.add_argument("--accum", type=int, default=1,
@@ -460,8 +501,26 @@ def main():
     pos = [0]
     os.makedirs(args.out, exist_ok=True)
     running = 0.0
-    # Early-stop ledger: best val seen, strikes since, stop flag.
-    best_val, bad_checks = float("inf"), 0
+
+    # Byte-normalised val: the only loss number comparable across vocabularies.
+    bpt = val_bytes_per_token(val_corpus, tok) if val_corpus is not None else 1.0
+    bpb_factor = math.log2(math.e) / bpt
+    # Patience in STEPS (via --patience-frac), not checks: a check count quietly
+    # depends on --val_every and killed exp 011 at 15% of its schedule.
+    if args.patience_frac > 0:
+        patience_checks = max(1, round(args.patience_frac * args.steps / max(1, args.val_every)))
+    else:
+        patience_checks = args.patience
+    if val_corpus is not None:
+        print(f"  val normalisation: {bpt:.4f} bytes/token -> "
+              f"bpb = val * {bpb_factor:.4f}")
+        print(f"  early stop: {patience_checks} checks "
+              f"({patience_checks * args.val_every} steps) of flat bpb; "
+              f"no plateau stop before step {int(args.min_steps_frac * args.steps)}; "
+              f"abort early if bpb > best x {1 + args.degrade_frac:.2f}")
+
+    # Early-stop ledger: best BITS/BYTE seen, strikes since, stop flag.
+    best_bpb, bad_checks = float("inf"), 0
 
     for step in range(start_step + 1, args.steps + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
@@ -489,38 +548,52 @@ def main():
         scaler.update()
         loss_val = micro_loss  # accumulated loss (already scaled by 1/accum)
 
-        # Val check on the held-out tail.
-        val, stop = None, False
+        # Val check on the held-out tail. All decisions use bits/byte.
+        val, val_bpb, stop = None, None, False
         if val_corpus is not None and args.val_every and step % args.val_every == 0:
             val = eval_loss(val_corpus)
-            if args.patience > 0:
-                # New best: snapshot it, reset strikes. Flat: burn patience.
-                improved = val < best_val - args.min_delta
-                best_val, bad_checks, stop = early_stop_update(
-                    best_val, val, bad_checks, args.patience, args.min_delta)
-                if improved:
+            val_bpb = val * bpb_factor
+            if patience_checks > 0:
+                if val_bpb < best_bpb - args.min_delta:
+                    # New best: snapshot it, reset strikes.
+                    best_bpb, bad_checks = val_bpb, 0
                     best_ckpt = os.path.join(
                         args.out, f"exp002_{tag}_{run_stamp}_best.pt")
                     saved_best = dict(vars(cfg))
                     saved_best["use_rope"] = args.use_rope
                     saved_best["tokenizer"] = args.tokenizer
                     saved_best["corpus"] = args.corpus or args.data
+                    saved_best["val_bpb"] = val_bpb
+                    saved_best["bytes_per_token"] = bpt
                     torch.save({"cfg": saved_best, "model": model.state_dict(),
                                 "optimizer": opt.state_dict(),
-                                "step": step, "val": val}, best_ckpt)
-                    print(f"  new best val={val:.4f} -> {best_ckpt}")
-                if stop:
-                    print(f"  early stop: val flat for {args.patience} checks "
-                          f"(best={best_val:.4f} @ step {step})")
+                                "step": step, "val": val, "val_bpb": val_bpb},
+                               best_ckpt)
+                    print(f"  new best bpb={val_bpb:.4f} (val={val:.4f}) -> {best_ckpt}")
+                else:
+                    bad_checks += 1
+                    if step < args.min_steps_frac * args.steps:
+                        # Mid-schedule a flat bpb is the LR still being high, not
+                        # convergence -- only a genuine climb is worth stopping for.
+                        if val_bpb > best_bpb * (1.0 + args.degrade_frac):
+                            stop = True
+                            print(f"  abort: bpb {val_bpb:.4f} > best {best_bpb:.4f} "
+                                  f"+{args.degrade_frac:.0%} at step {step} (mid-schedule)")
+                    elif bad_checks >= patience_checks:
+                        stop = True
+                        print(f"  early stop: bpb flat for {bad_checks} checks "
+                              f"({bad_checks * args.val_every} steps) — "
+                              f"best={best_bpb:.4f} @ step {step}")
 
         running += (loss_val - running) / min(step, 50)
         log_f.write(json.dumps({"step": step, "train": round(loss_val, 4),
                                 "avg50": round(running, 4),
                                 "val": round(val, 4) if val else None,
+                                "val_bpb": round(val_bpb, 5) if val_bpb else None,
                                 "lr": lr}) + "\n")
         log_f.flush()   # a watcher should see steps appear, not wait for 4KB
         if step % 25 == 0 or step == 1:
-            vstr = f" val={val:.4f}" if val else ""
+            vstr = f" val={val:.4f} bpb={val_bpb:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
                   f"avg50={running:.4f}{vstr} lr={lr:.1e}", flush=True)
         if step % 500 == 0 or step == args.steps:
@@ -539,11 +612,13 @@ def main():
         if stop:
             # Patience spent: the keeper is the best ckpt, not this one.
             log_f.write(json.dumps({"early_stop": True, "step": step,
-                                    "best_val": round(best_val, 4)}) + "\n")
+                                    "best_val": round(best_bpb / bpb_factor, 4),
+                                    "best_bpb": round(best_bpb, 5)}) + "\n")
             break
 
     log_f.close()
-    print(f"done. final avg50 loss={running:.4f}  run dir: {run_path}")
+    _best = "n/a" if best_bpb == float("inf") else f"{best_bpb:.4f}"
+    print(f"done. final avg50 loss={running:.4f}  best bpb={_best}  run dir: {run_path}")
 
 
 if __name__ == "__main__":

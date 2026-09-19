@@ -129,16 +129,12 @@ resolution early and memorizes training data. Best val (4.09) is the same as
 every other vocab size — the embedding layer is the bottleneck, not data or
 architecture. Next: try 16k vocab (experiment 011).
 KEEPER: checkpoints/exp002_m50m_rope_bpe_owt4k_202609172151_step2500.pt
-LESSON: **Always use --patience with early stopping.** Without it, the model
-wastes hours memorizing after the val inflection point. Set patience=10
-(val must improve by min_delta=0.001 within 10 checks = 1000 steps).
-
-### 011 — M50M Full OpenWebText (16k vocab)
-Status: QUEUED
-Config: same as 010 but with bpe_owt16k tokenizer (~16k vocab).
-Hypothesis: larger vocab gives the embedding layer more resolution, which
-should improve generalization for 55M params. Target val < 4.09.
-NOTE: smoke 200 first, then --patience 10 --min_delta 0.001 for full run.
+LESSON: **Early stopping must be schedule-aware, not a check count.** 010 ran with
+patience=0 and memorised for hours; the first fix (patience=10 checks) was still
+wrong in the other direction — 10 checks x val_every 100 = 1000 steps = 5% of a
+20k cosine schedule, so a mid-schedule plateau reads as convergence. Use
+`--patience-frac` (a fraction of --steps) with `--min-steps-frac` so no plateau
+stop can fire while the LR is still near peak. See the 011 results section.
 
 ### 011 — M50M Full OpenWebText (16k vocab)
 Status: TOKENIZING (Sep 18, 2026 — Ronin)
@@ -163,10 +159,65 @@ What broke before, and why it can't now:
 
 Smoke evidence (Sep 18): encode 40s (370k tok/s), verify 7/7, resume skip all 3
 shards in 0.7s, 200 train steps in 81s (0.4s/step -> 20k steps ~2.2h on the 4070 Ti).
+NOTE: that 0.4s/step baseline did not hold for the full run — 011b measured
+1.20s/step (3.2x slower, ~5.8h for 17.5k steps), most likely GPU contention with
+the desktop (15.8/16 GB in use). Always estimate from a measured rate, not from a
+smoke run on an idle GPU.
+
+### 011 results — and a measurement error that inverted the verdict
+
+**The per-token comparison was invalid.** 011 stopped at step 3300 with best val
+4.8604 against 010's 4.0986, which reads as "16k is 18.6% worse". It is not: a
+16k BPE emits FEWER, more informative tokens (0.2463 vs 0.2976 tok/byte, measured
+on the same held-out tail text), so its per-token loss is mechanically higher at
+identical compression quality. Convert with
+`bits/byte = val_nats * log2(e) * tokens_per_byte`:
+
+| run | vocab | tok/byte | best val (per-token) | bits/byte |
+|-----|-------|----------|----------------------|-----------|
+| 010 | 4k    | 0.2976   | 4.0986               | 1.7596    |
+| 011 | 16k   | 0.2463   | 4.8604               | 1.7271    |
+
+**16k was ahead all along**, by 1.8% — and the in-run metric agrees: 011b's
+byte-normalised val hit 1.7013. `train/train.py` now reports and DECIDES on
+`val_bpb` (loss.jsonl rows carry both `val` and `val_bpb`), and `--min_delta`
+applies to bpb.
+
+**The early stop also fired for the wrong reason.** Patience was `10 checks x
+val_every 100` = 1000 steps = 5% of a 20k cosine schedule, so 011 stopped at step
+3300 while the LR was still 2.8e-4. A flat val there is the schedule, not
+convergence — which also leaves 010's "the embedding layer is the bottleneck"
+conclusion unproven. Patience is now a FRACTION of --steps (`--patience-frac`),
+and no plateau stop can fire before `--min-steps-frac` of the schedule.
+
+**Calibrate the mid-schedule abort from the noise band.** 011b reached best
+bpb 1.7013 and was then killed at step 3700 by `bpb 1.7870 > best +5%`. That
+threshold sat inside the noise: the measured val series swings a median 5.2%
+between consecutive checks (max 10.4%), with excursions up to 5.0% above the
+running best from nothing but noise, while genuine memorisation (010) was +143%.
+Noise and divergence are ~30x apart, so `--degrade-frac` now defaults to 0.30.
+LESSON: never set an abort threshold by feel — measure the noise band first, or
+you will abort healthy runs and blame the model.
+
+011c resumes from 011b's keeper (step 2500, val 4.7666 / bpb 1.7013) with
+`--patience-frac 0.15 --min-steps-frac 0.6 --degrade-frac 0.30`, so the earliest a
+plateau can stop it is step 15000, where the LR has decayed to ~7e-5 from 3e-4.
+Launcher: `run_exp011c_train.bat` — its header documents the git-bash invocation
+trap (`cmd //c foo.bat` silently does nothing; use
+`MSYS_NO_PATHCONV=1 cmd.exe /c "foo.bat"`) and the interpreter trap (bare `python`
+is the CUDA venv; `llm-lab/.venv` is CPU-only torch and will train 50x slower
+without ever looking wrong).
 
 ## Current state (2026-09-18) — read this first, it's the handoff
 
-**16k OWT corpus:** `data/openwebtext_combined_bpe_owt16k.bin` (raw int32, ~38GB, ~9.46B
+**16k OWT corpus — DONE (2026-09-18 15:11, unattended):** 9,745,672,850 tokens
+(38.98GB int32), 80/80 shards, verify **7/7 green** (shape, manifest delta +0, id range,
+round-trip decode, shard-boundary offsets at 0 / 40 / 79, memmap loadability).
+The waiter filled the dead worker's shards (33-42) and merged in corpus order with
+nobody watching — see `logs/followup.log` and `logs/16k_tokenize_followup.log`.
+NOTE: the first encode exited 1 on purpose (refusing to merge with shards missing).
+
+**16k OWT corpus (original notes):** `data/openwebtext_combined_bpe_owt16k.bin` (raw int32, ~38GB, ~9.46B
 tokens expected). Encoded in parallel (8 worker processes, `run_16k_full_par.bat`),
 ~1.6M tok/s aggregate.
 
