@@ -336,6 +336,8 @@ def main():
                     help="loss.jsonl + samples land here per run")
     ap.add_argument("--accum", type=int, default=1,
                     help="gradient accumulation steps: effective batch = batch * accum")
+    ap.add_argument("--warmup", type=int, default=None,
+                    help="warmup steps (default: min(200, steps//10))")
     ap.add_argument("--resume", default=None,
                     help="checkpoint .pt to resume from (model + optimizer restored, steps continue to --steps)")
     args = ap.parse_args()
@@ -380,7 +382,7 @@ def main():
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95),
                             weight_decay=0.1)
-    warmup = min(200, args.steps // 10)
+    warmup = args.warmup if args.warmup is not None else min(200, args.steps // 10)
 
     # Resume: weights + optimizer back, step counter continues to --steps.
     # Shape mismatch (e.g. ctx/vocab change) fails loud, not silent.
