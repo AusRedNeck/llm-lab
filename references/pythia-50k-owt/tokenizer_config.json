@@ -1,0 +1,8 @@
+{
+  "_name_or_path": "gpt-neox-owt-bpe-vocab",
+  "model_max_length": 2048,
+  "model_type": "gpt_neox",
+  "tokenizer_class": "GPTNeoXTokenizerFast",
+  "vocab_size": 50256,
+  "merges_file": "tokenizer.json"
+}
