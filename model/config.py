@@ -146,6 +146,22 @@ L112M_14L768 = ModelConfig(
     dropout=0.1,
 )
 
+# Pythia-160M SHAPE: 12L x 768H x 12 heads x FFN 3072 (64 dims/head).
+# Reference: EleutherAI/pythia-160m (spec + tokenizer in references/pythia-160m/).
+# NOTE: matches the SHAPE for the capacity series (70.65M -> 113.86M -> 162.6M @ 50k),
+# not the NeoX stack: we keep sequential residual, full RoPE, dropout 0.1 (see the
+# reference README for the fidelity deltas). ~162.7M @ 50k vocab untied (real count,
+# ctx 512), 110.3M @ 16k, 85.3M trunk (the axis that actually carries capacity at
+# 50k vocab).
+PYTHIA160_12L768 = ModelConfig(
+    vocab_size=50256,     # overridden from bpe_owt50k_v2 file at runtime
+    context_length=512,
+    embedding_dim=768,
+    num_layers=12,
+    num_heads=12,
+    dropout=0.1,
+)
+
 # Pythia-scaled: 6L × 512H × 8 heads × FFN 2048. ~52M @ 16k vocab.
 # Reference: EleutherAI/pythia-70m uses the same arch (6/512/8/2048).
 PYTHIA_6L512 = ModelConfig(

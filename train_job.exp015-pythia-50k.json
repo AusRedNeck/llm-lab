@@ -1,0 +1,32 @@
+{
+  "name": "exp015-pythia-50k",
+  "desc": "THE QUEUED PYTHIA-50K RUN (on the shared surface since 2026-09-20). Pythia-70M-shape trunk (6L x 512 x 8H, 'pythia' preset = 70.65M @ 50k vocab untied, 19.14M trunk) on the full re-encoded OWT 50k stream (8,882,721,400 tokens). LR 1.5e-3 = winner of the 2026-09-22 50k LR ladder (val bpb @1000 steps: 1e-3=1.7406, 1.5e-3=1.6953, 2e-3=1.7466, 3e-3=2.5025 diverged). Eff batch 64 (16x4) matches the ladder so the LR transfers. 20k-step ceiling with exp014's guard set so it self-aborts at the knee. On completion the watchdog chains to the pythia160 LR probe rung 1of3.",
+  "ckpt_dir": "checkpoints",
+  "stamp": "",
+  "run_name": "",
+  "target_steps": 20000,
+  "python": "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe",
+  "train_args": [
+    "--steps", "20000",
+    "--batch", "16",
+    "--accum", "4",
+    "--lr", "1.5e-3",
+    "--preset", "pythia",
+    "--corpus", "data/openwebtext_combined.txt",
+    "--tokenizer", "checkpoints/bpe_owt50k_v2.json",
+    "--tok_cache", "data/openwebtext_combined_bpe_owt50kv2.bin",
+    "--use_rope",
+    "--val_every", "100",
+    "--patience-frac", "0.15",
+    "--min-steps-frac", "0.6",
+    "--degrade-frac", "0.15",
+    "--dropout", "0.1"
+  ],
+  "match": ["train.train", "--preset pythia ", "bpe_owt50k_v2", "--accum 4"],
+  "log": "logs/exp015_pythia_50k.log",
+  "max_restarts": 6,
+  "min_progress_steps": 25,
+  "completed": false,
+  "next_job": "train_job.pythia160_probe_1of3.json",
+  "notes": "PRECONDITION verified 2026-09-21: data/openwebtext_combined_bpe_owt50kv2.bin verify 7/7 (50k bin encoded with hf_bpe_shim for token parity; the legacy --tokenizer is vocab/bytes-per-token only). Watchdog relaunches now RESUME from the newest step ckpt (train_watchdog.newest_step_ckpt, mtime-floored at this spec). Expected duration ~7-8h at 46-72k tok/s if the knee does not fire earlier (20k steps x eff64 x 512 = 655M tokens). NOTE the '--preset pythia ' needle carries a trailing space on purpose so it cannot match a '--preset pythia160' process."
+}

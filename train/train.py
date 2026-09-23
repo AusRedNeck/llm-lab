@@ -35,7 +35,7 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
+from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, PYTHIA160_12L768, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
@@ -44,6 +44,7 @@ PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "m50m": M50M_10L640, "m50m_1k": M50M_10L640_1K,
            "m52m": M52M_10L640, "m60m": M60M_10L640,
            "pythia": PYTHIA_6L512,
+           "pythia160": PYTHIA160_12L768,
            "l194m": L194M_14L1024,
            "l112m": L112M_14L768}
 

@@ -18,6 +18,18 @@ Why progress is read from the loss curve and not from checkpoints: checkpoints l
 compare checkpoints, and the guard would strike a healthy run. loss.jsonl advances every
 step, so it is the honest progress signal. The ckpt step is the fallback.
 
+Two rules that keep this honest, both paid for in production:
+
+  * Identify a run by its FAMILY, not by the exact run_name/log the spec claims. The trainer
+    self-stamps its own run dir when the spec carries no stamp, so the spec drifts from what
+    was actually written. Matching on spec fields made the finish test blind to a completed
+    run, which then got relaunched until the restart budget ran out: 121 consecutive failed
+    cron ticks on a run that had ended cleanly by its own early-stop rule.
+  * LATCH a terminal verdict. Once a run is finished/complete/stalled/exhausted that is the
+    answer for that job, so later ticks exit 0 and stay silent. Re-deriving the same verdict
+    every 10 minutes turned one finished run into a permanent red alarm -- and because the
+    alert itself failed to deliver, nobody saw it.
+
 Usage:
   python train_watchdog.py                 # normal (mutates state, may relaunch)
   python train_watchdog.py --dry-run       # decide + print, never touch anything
@@ -36,17 +48,26 @@ SPEC = os.path.join(LAB, "train_job.json")
 TASK = "Hermes_TrainRun"          # parked scheduled task (kept for fallback; direct launch preferred)
 GRACE_MINUTES = 5                 # never relaunch within this window of the last attempt
 STRIKE_LIMIT = 2                  # consecutive no-progress deaths before giving up
+# Verdicts that are FINAL for one job. Once recorded they latch: later ticks stay silent
+# instead of re-deriving the same conclusion and failing the cron run forever.
+TERMINAL = ("stopped-by-rule", "complete", "exhausted", "stalled")
 HERMES_PYTHON = "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"
 DETACHED = 0x00000008             # Windows DETACHED_PROCESS flag
 
 
-def launch_direct(spec):
+def launch_direct(spec, spec_path=None):
     """Launch the trainer directly via subprocess.Popen (detached, no schtasks/VBS/bat).
 
     Returns True on success, False on failure. The process is parented to nothing
     (DETACHED_PROCESS), so an app restart cannot kill it.
+
+    Relaunches RESUME from the job's newest step ckpt (fresh when none is newer than the
+    spec) -- without this a crash burned the run's whole compute history on restart.
     """
     cmd = [spec["python"], "-u", "-m", "train.train"] + list(spec["train_args"])
+    resume = newest_step_ckpt(spec, spec_path)
+    if resume:
+        cmd += ["--resume", os.path.relpath(resume[1], LAB).replace("\\", "/")]
     log_path = os.path.join(LAB, spec.get("log", "logs/trainer.log"))
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
@@ -61,7 +82,9 @@ def launch_direct(spec):
             env=env, creationflags=DETACHED,
             close_fds=True,
         )
-        print(f"[watchdog] DIRECT LAUNCH: pid={proc.pid} cmd={' '.join(cmd[:6])}...")
+        print(f"[watchdog] DIRECT LAUNCH: pid={proc.pid} "
+              f"resume={('step' + str(resume[0])) if resume else 'fresh'} "
+              f"cmd={' '.join(cmd[:6])}...")
         return True
     except Exception as e:
         print(f"[watchdog] DIRECT LAUNCH FAILED: {e}")
@@ -134,62 +157,195 @@ def stuck_note(spec, st, step, now):
     return None
 
 
-def run_finished(spec):
-    """True when the RUN ITSELF ended deliberately: its early-stop guard fired, or the
-    trainer printed its completion line. This is a legitimate end state, NOT a crash --
-    treating it as 'dead' makes the watchdog relaunch a finished run, which then aborts
-    again (observed live 2026-09-18: the degrade guard fired at step 8200/20000)."""
-    run_dir = os.path.join(LAB, "runs", spec["run_name"])
-    lj = os.path.join(run_dir, "loss.jsonl")
-    if os.path.exists(lj):
+def run_family(spec):
+    """The run-dir family a spec belongs to: run_name minus its leading YYYYMMDD_HHMM_ stamp.
+
+    The trainer SELF-STAMPS its own run dir whenever the spec carries no stamp, so a spec
+    that says run_name 1332 can end up with a curve in the 1344 dir (observed live
+    2026-09-19: train_job.json said 20260919_1332, the trainer wrote 20260919_1344). Keying
+    the finish test off the exact run_name made the watchdog blind to a completed run and
+    relaunch it until the restart budget ran out -- 121 consecutive failed cron ticks.
+    Matching on the family (everything after the stamp) makes that drift harmless.
+    """
+    rn = spec.get("run_name") or ""
+    return re.sub(r"^\d{8}_\d{4}_", "", rn)
+
+
+def curve_step(lj):
+    """Newest step recorded in a loss curve, or None. Reads the tail only (curves get big)."""
+    try:
+        with open(lj, "rb") as f:
+            f.seek(max(0, os.path.getsize(lj) - 65536))
+            tail = f.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    last = None
+    for line in tail.splitlines():
+        m = re.search(r'"step"\s*:\s*(\d+)', line)
+        if m:
+            last = int(m.group(1))
+    return last
+
+
+def find_run_dir(spec):
+    """The run dir this job actually writes to: exact run_name when its curve exists, else the
+    NEWEST dir of the same family (ranked by curve step, then mtime). None if neither exists."""
+    named = spec.get("run_name")
+    if named:
+        exact = os.path.join(LAB, "runs", named)
+        if os.path.exists(os.path.join(exact, "loss.jsonl")):
+            return exact
+    fam = run_family(spec)
+    if not fam:
+        return None
+    cands = [d for d in glob.glob(os.path.join(LAB, "runs", "*" + fam)) if os.path.isdir(d)]
+    if not cands:
+        return None
+
+    def score(d):
+        lj = os.path.join(d, "loss.jsonl")
+        step = curve_step(lj) if os.path.exists(lj) else None
+        return (step if step is not None else -1, os.path.getmtime(d))
+
+    return max(cands, key=score)
+
+
+def finished_log(spec, st, spec_path=None):
+    """A trainer log written since this job started that carries the completion line. Written as
+    a search rather than spec['log'] because a launcher can hand the same job a different log
+    name than the spec claims (spec said exp012b_supervised.log, the run wrote exp013_ctx1024.log).
+
+    The floor matters: with no floor the search would happily return the completion line of a
+    PREVIOUS job and declare the current one finished before it ran a step. So a candidate must
+    be newer than the last launch, or (first run, nothing launched yet) newer than the spec."""
+    stamps = [st.get("last_launch"), st.get("last_relaunch")]
+    floor = None
+    for v in stamps:
+        if not v:
+            continue
         try:
-            with open(lj, "rb") as f:
-                f.seek(max(0, os.path.getsize(lj) - 65536))
-                tail = f.read().decode("utf-8", "replace")
-            if '"early_stop": true' in tail:
-                return True, "early-stop guard fired"
+            ts = datetime.fromisoformat(v).timestamp()
+            floor = ts if floor is None else max(floor, ts)
         except Exception:
             pass
-    log = os.path.join(LAB, spec["log"])
-    if os.path.exists(log):
+    if floor is None and spec_path and os.path.exists(spec_path):
+        floor = os.path.getmtime(spec_path)
+    for p in glob.glob(os.path.join(LAB, "logs", "*.log")):
         try:
-            with open(log, "rb") as f:
-                f.seek(max(0, os.path.getsize(log) - 8192))
-                tail = f.read().decode("utf-8", "replace")
-            if "done. final" in tail:
-                return True, "trainer printed 'done.'"
+            if floor is not None and os.path.getmtime(p) < floor:
+                continue
+            with open(p, "rb") as f:
+                f.seek(max(0, os.path.getsize(p) - 8192))
+                if "done. final" in f.read().decode("utf-8", "replace"):
+                    return p
         except Exception:
-            pass
+            continue
+    return None
+
+
+def run_finished(spec, st, spec_path=None):
+    """True when the RUN ITSELF ended deliberately: its early-stop guard fired, it reached
+    target_steps, or the trainer printed its completion line. This is a legitimate end state,
+    NOT a crash -- treating it as 'dead' makes the watchdog relaunch a finished run, which then
+    aborts again (observed live 2026-09-18: the degrade guard fired at step 8200/20000)."""
+    rd = find_run_dir(spec)
+    if rd:
+        lj = os.path.join(rd, "loss.jsonl")
+        if os.path.exists(lj):
+            try:
+                with open(lj, "rb") as f:
+                    f.seek(max(0, os.path.getsize(lj) - 65536))
+                    tail = f.read().decode("utf-8", "replace")
+                if '"early_stop": true' in tail:
+                    return True, "early-stop guard fired"
+            except Exception:
+                pass
+        step = curve_step(lj) if os.path.exists(lj) else None
+        if step is not None and step >= spec["target_steps"]:
+            return True, f"reached target_steps ({spec['target_steps']})"
+    log = finished_log(spec, st, spec_path)
+    if log:
+        return True, f"trainer printed 'done.' in {os.path.basename(log)}"
     return False, ""
 
 
 def progress_step(spec):
     """Newest step the run has actually reached: loss.jsonl first, ckpt step second."""
-    run_dir = os.path.join(LAB, "runs", spec["run_name"])
-    lj = os.path.join(run_dir, "loss.jsonl")
+    rd = find_run_dir(spec)
     last = None
-    if os.path.exists(lj):
-        with open(lj, "rb") as f:
-            try:
-                f.seek(max(0, os.path.getsize(lj) - 65536))
-                tail = f.read().decode("utf-8", "replace")
-            except Exception:
-                tail = ""
-        for line in tail.splitlines():
-            m = re.search(r'"step"\s*:\s*(\d+)', line)
-            if m:
-                last = int(m.group(1))
+    if rd:
+        lj = os.path.join(rd, "loss.jsonl")
+        if os.path.exists(lj):
+            last = curve_step(lj)
     step_ck = newest_ckpt_step(spec)
     return max([x for x in (last, step_ck) if x is not None], default=None)
 
 
+def ckpt_patterns(spec):
+    """Glob patterns for THIS job's step checkpoints, using the trainer's real naming convention
+    (exp002_<preset>_<tokenizer-stem>_<stamp>_step<N>.pt). The run-dir family is NOT used: ckpt
+    names carry the preset+tokenizer stem and omit the run dir's corpus suffix, so family
+    matching finds nothing (exp002_pythia_rope_bpe_owt16k_202609191655_step500.pt has no
+    'pythia_rope_bpe_owt16k_openwebtext_combined' anywhere in it)."""
+    pats = []
+    if spec.get("stamp"):
+        pats.append(f"*_{spec['stamp']}_step*.pt")
+    args = spec.get("train_args") or []
+
+    def val(flag):
+        try:
+            return args[args.index(flag) + 1]
+        except Exception:
+            return None
+
+    preset, tok = val("--preset"), val("--tokenizer")
+    if preset and tok:
+        stem = os.path.splitext(os.path.basename(tok))[0]
+        pats.append(f"*{preset}*{stem}*_step*.pt")
+    return pats
+
+
 def newest_ckpt_step(spec):
+    """Newest step checkpoint belonging to this job, or None. Deliberately returns None rather
+    than guessing: a step from the WRONG run would either fake completion or suppress a needed
+    relaunch, and the loss curve is the authoritative progress signal anyway."""
     best = None
-    for p in glob.glob(os.path.join(LAB, spec["ckpt_dir"], f"*_{spec['stamp']}_step*.pt")):
-        m = re.search(r"_step(\d+)\.pt$", p)
-        if m:
+    for pat in ckpt_patterns(spec):
+        for p in glob.glob(os.path.join(LAB, spec["ckpt_dir"], pat)):
+            m = re.search(r"_step(\d+)\.pt$", p)
+            if m:
+                st = int(m.group(1))
+                best = st if best is None else max(best, st)
+    return best
+
+
+def newest_step_ckpt(spec, spec_path=None):
+    """Highest-step ckpt for a (re)launch to --resume from. STEP ckpts only: _best.pt is an
+    earlier step by definition, so resuming from it throws away progress (train_launch.py's
+    rule, kept).
+
+    Cross-run bleed guard: the loose preset+tokenizer glob matches EVERY run of that pair --
+    a chained probe would resume its predecessor's weights and measure the wrong LR -- so
+    candidates must be newer than the active spec file. Arming and chain-swapping both
+    rewrite train_job.json, so its mtime marks this job's era: its own ckpts are newer,
+    earlier runs' ckpts are not."""
+    floor = None
+    if spec_path:
+        try:
+            floor = os.path.getmtime(spec_path)
+        except OSError:
+            pass
+    best = None
+    for pat in ckpt_patterns(spec):
+        for p in glob.glob(os.path.join(LAB, spec["ckpt_dir"], pat)):
+            m = re.search(r"_step(\d+)\.pt$", p)
+            if not m:
+                continue
+            if floor is not None and os.path.getmtime(p) < floor:
+                continue
             st = int(m.group(1))
-            best = st if best is None else max(best, st)
+            if best is None or st > best[0]:
+                best = (st, p)
     return best
 
 
@@ -209,6 +365,15 @@ def main():
     st = load_json(STATE, {})
     now = datetime.now()
 
+    # The state file is shared by every job that ever lives in this spec path, so it must not
+    # leak one job's verdict into the next. Anything recorded for a DIFFERENT job name is
+    # stale by definition: drop the restart ledger with it (otherwise a fresh run inherits
+    # 'exhausted' and the watchdog refuses to supervise it at all).
+    if st.get("job") not in (None, spec.get("name")):
+        st = {}
+    st["job"] = spec.get("name")
+    st["run_name"] = spec.get("run_name")
+
     proc = running_process(spec)
     if proc is not None:
         step_now = progress_step(spec)
@@ -227,13 +392,25 @@ def main():
             print(note)
         return 0
 
+    # A latched verdict means we already said the true thing about this run. Re-deriving it
+    # every 10 minutes is how one finished run produced 121 failed cron ticks and 121
+    # undeliverable alerts; a finished run is not a recurring failure.
+    if st.get("status") in TERMINAL:
+        if not spec.get("completed") and not dry:
+            spec["completed"] = True
+            with open(spec_path, "w", encoding="utf-8") as f:
+                json.dump(spec, f, indent=2)
+        if not quiet:
+            print(f"[watchdog] {spec['name']}: {st['status']} (final, latched - nothing to do)")
+        return 0
+
     step = progress_step(spec)
     target = spec["target_steps"]
 
     # A run that ended BY ITS OWN RULE (early-stop / degrade guard) is finished, not dead.
     # Without this the watchdog relaunches it, the guard fires again, and it burns the
     # restart budget on a completed run -- observed live 2026-09-18, step 8200/20000.
-    finished, why = run_finished(spec)
+    finished, why = run_finished(spec, st, spec_path)
     if finished:
         first_time = not spec.get("completed")
         if not dry and first_time:
@@ -258,7 +435,7 @@ def main():
                         print(f"[watchdog] CHAIN: swapping in {nspec['name']} from {next_job}")
                         with open(spec_path, "w", encoding="utf-8") as f:
                             json.dump(nspec, f, indent=2)
-                        launch_direct(nspec)
+                        launch_direct(nspec, spec_path)
                         return 0
         return 0
 
@@ -286,7 +463,7 @@ def main():
                     # Overwrite train_job.json with the next spec
                     with open(spec_path, "w", encoding="utf-8") as f:
                         json.dump(nspec, f, indent=2)
-                    launch_direct(nspec)
+                    launch_direct(nspec, spec_path)
                     return 0
         print(f"[watchdog] job marked complete - nothing to do")
         return 0
@@ -338,7 +515,7 @@ def main():
 
     if not task_exists():
         print(f"[watchdog] launching directly (no scheduled task needed)")
-    if not launch_direct(spec):
+    if not launch_direct(spec, spec_path):
         print(f"[watchdog] direct launch failed - cannot relaunch")
         return 1
     st.update({"status": "relaunching", "relaunch_count": restarts, "strikes": strikes,
