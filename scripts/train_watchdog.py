@@ -116,12 +116,20 @@ def running_process(spec):
     Two extra guards, both earned: (1) the name must be a python interpreter -- a shell,
     editor or agent process can have the job's own command text on its command line (a test
     harness that merely MENTIONS the needles matched itself); (2) the cmdline must contain
-    the literal '-m train.train', which is how the trainer is always invoked."""
+    the literal '-m train.train', which is how the trainer is always invoked.
+
+    Returns (proc_or_None, can_tell). can_tell=False means the probe itself was blind
+    (no psutil under this interpreter -- observed live 2026-09-23: cron ran the watchdog
+    under a python without psutil, running_process returned None, and the tick launched a
+    SECOND trainer beside a healthy one). Blind must NEVER be read as dead: caller treats
+    can_tell=False as no-op."""
+    needles = [n.lower() for n in spec.get("match", ["train.train"])]
     try:
         import psutil
     except ImportError:
-        return None
-    needles = [n.lower() for n in spec.get("match", ["train.train"])]
+        # Cron may run us under an interpreter without psutil (observed 2026-09-23).
+        # Fall back to a stdlib-only probe instead of going blind.
+        return _running_process_wmic(needles)
     for p in psutil.process_iter(["pid", "name", "cmdline"]):
         name = (p.info.get("name") or "").lower()
         if not name.startswith("python"):
@@ -131,8 +139,35 @@ def running_process(spec):
         except Exception:
             continue
         if cl and "-m train.train" in cl and all(n.lower() in cl for n in needles):
-            return p
-    return None
+            return p, True
+    return None, True
+
+
+def _running_process_wmic(needles):
+    """Stdlib-only process probe via WMI, for interpreters without psutil.
+
+    Returns (match, can_tell). can_tell=False only if WMI itself fails — same
+    blind-is-not-dead rule. Match rules mirror the psutil path: python-named
+    process whose cmdline contains '-m train.train' + every needle."""
+    import subprocess
+    q = ("Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
+         "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", q],
+                           capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None, False
+    if r.returncode != 0:
+        return None, False
+    for line in r.stdout.splitlines():
+        pid_s, _, cl = line.partition("\t")
+        cl = (cl or "").lower()
+        if "-m train.train" in cl and all(n in cl for n in needles):
+            try:
+                return int(pid_s.strip()), True
+            except ValueError:
+                continue
+    return None, True
 
 
 def stuck_note(spec, st, step, now):
@@ -374,19 +409,28 @@ def main():
     st["job"] = spec.get("name")
     st["run_name"] = spec.get("run_name")
 
-    proc = running_process(spec)
+    proc, can_tell = running_process(spec)
+    proc_pid = (proc.info["pid"] if hasattr(proc, "info") else proc) if proc else None
+    if not can_tell:
+        # Blind probe (no psutil under THIS interpreter). Do NOT relaunch: 2026-09-23,
+        # cron's python lacked psutil, this returned None, and the tick double-launched
+        # a healthy 160M run onto a 16GB GPU. Blind != dead. Alert loudly instead.
+        print(f"[watchdog] ERROR: cannot probe processes (psutil missing under "
+              f"{sys.executable}) — refusing to judge job '{spec.get('name')}'. "
+              f"Install psutil for this interpreter or repoint cron. No-op this tick.")
+        return 1
     if proc is not None:
         step_now = progress_step(spec)
         note = stuck_note(spec, st, step_now, now)
         if not dry:
-            st.update({"status": "running", "pid": proc.info["pid"],
+            st.update({"status": "running", "pid": proc_pid,
                        "checked_at": now.isoformat(timespec="seconds")})
             if st.get("watchdog_last_step") != step_now:
                 st["watchdog_last_step"] = step_now
                 st["watchdog_last_at"] = now.isoformat(timespec="seconds")
             save_state(st, STATE)
         if not quiet:
-            print(f"[watchdog] running: pid={proc.info['pid']} (job={spec['name']}) "
+            print(f"[watchdog] running: pid={proc_pid} (job={spec['name']}) "
                   f"step={step_now}")
         if note:
             print(note)
