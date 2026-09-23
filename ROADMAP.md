@@ -1,5 +1,18 @@
 # llm-lab Roadmap
 
+## Status update (2026-09-22) — read first; supersedes stale bits below
+
+### exp014 done + FROZEN LADDER verdict (eval_frozen_ladder.py)
+- exp014 (m50m @ bpe_owt50k_v2, full OWT): self-aborted step 5900 by the degrade guard; live best 1.7256 @ 2700; job completed.
+- Ladder = all 12 ckpts scored frozen on ONE identical batch set (logs/frozen_ladder_exp014.json): **val bpb rises monotonically after 2500 — 1.7383 → 1.9402 @ 5500. REAL overfit. Guard fired correctly; best.pt is essentially the true peak (1.7400 vs 1.7383 @ 2500).**
+- Frozen train ≈ frozen val at every rung (|gap| ≤ 0.006 nats) → splits clean; frozen ≈ live val (5500: 5.9349 vs 5.9871) → live val metric and guard decisions were accurate. eval_diag's "artifact" holds ONLY for the live TRAIN line / within-ckpt gap — it does NOT extend to the cross-step val trajectory.
+- Standing pattern: m50m collapses at 440–901M tokens regardless of vocab (exp014 440M, exp011c 901M).
+
+### LR sweep status
+- 16k COMPLETE (5 arms). Val bpb @ equal tokens (step 2500): 6e-4 1.6483 · 1e-3 1.5728 · 1.5e-3 1.5433 · 2e-3 1.5271 · **3e-3 1.5192 — still improving, knee not reached.** (Train-avg50 had suggested 2e-3; val bpb is the decider.)
+- **Phase 2b RUNNING** — 50k probe on the REAL Phase-3 config: pythia @ bpe_owt50k_v2, arms 1e-3/1.5e-3/2e-3/3e-3, 1000 steps each, eff batch 64, log `logs/lr_sweep_50k.log`. Phase 3's peak LR comes from here — the 16k sweep was a proxy config.
+- Scoreboard (directional; pythia arms = eff64 + tuned LR, m50m = eff32 + default 3e-4; live metric reads ≈0.01-0.02 better than frozen): pythia@16k 1.5192 (still improving) > m50m@16k 1.5854 > **m50m@50k 1.7383 — worst peak; early overfit. 50k-vocab toxicity signal on the m50m trunk (n=1/side, vocab+bin confounded); the pythia@50k probe tests whether it generalizes.**
+
 ## Current Status (2026-09-19)
 
 ### Experiments Completed

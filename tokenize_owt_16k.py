@@ -52,6 +52,7 @@ import time
 import token_io
 from token_io import encode_file_stream, human, fmt_eta, read_meta, write_meta
 from model.bpe import BPETokenizer
+from hf_bpe_shim import HfBpeShim
 
 DATA = token_io.data_dir()
 DEFAULT_SHARD_DIR = os.path.join(DATA, "openwebtext", "shards")
@@ -94,9 +95,36 @@ def shard_list(shards_dir: str, limit: int = 0) -> list[str]:
     return shards[:limit] if limit else shards
 
 
+def load_vocab(vocab_path: str):
+    """Load either vocab flavour, always with .encode(text) -> list[int].
+
+    Legacy BPETokenizer json -> BPETokenizer. HF `tokenizer.json` (has "model" +
+    "pre_tokenizer") -> HfBpeShim over the real HF encoder.
+
+    Use the shim for HF vocabs. Re-deriving a legacy vocab from an HF one and
+    encoding with it is NOT token-for-token identical to the HF encoder: measured
+    on 2M chars of OWT shard 0 the legacy path produced 440,537 tokens against the
+    HF encoder's 440,322 (+0.05%), first diverging around curly quotes/accents.
+    A corpus must be encoded by the same encoder that trained the vocab.
+    """
+    import json
+    with open(vocab_path, encoding="utf-8") as f:
+        head = json.load(f)
+    if "model" in head and "pre_tokenizer" in head:
+        return HfBpeShim.from_file(vocab_path)
+    return BPETokenizer.load(vocab_path)
+
+
+def vocab_len(tok) -> int:
+    """Entry count, whichever flavour of tokenizer this is."""
+    if hasattr(tok, "vocab"):
+        return len(tok.vocab)
+    return len(tok._hf.get_vocab())
+
+
 def probe_ratio(shard_path: str, vocab_path: str, chars: int = 200_000) -> float:
     """chars-per-token on a small sample — used for preflight size and ETA."""
-    tok = BPETokenizer.load(vocab_path)
+    tok = load_vocab(vocab_path)
     with open(shard_path, encoding="utf-8", errors="replace") as f:
         sample = f.read(chars)
     n = len(tok.encode(sample))
@@ -604,13 +632,13 @@ def main(argv=None) -> int:
         print(f"worker {args.worker_id}: shards {args.shard_from}-{args.shard_to - 1} "
               f"({len(shards)} of {len(all_shards)}) -> {os.path.basename(args.out)}",
               flush=True)
-        res = run_range(shards, args.out, args, BPETokenizer.load(args.vocab))
+        res = run_range(shards, args.out, args, load_vocab(args.vocab))
         print(f"worker {args.worker_id} finished: {res['tokens']:,} tokens", flush=True)
         return 0
 
     total_bytes = sum(os.path.getsize(s) for s in all_shards)
     print(f"vocab      {os.path.basename(args.vocab)} "
-          f"({len(BPETokenizer.load(args.vocab).vocab):,} tokens)")
+          f"({vocab_len(load_vocab(args.vocab)):,} tokens)")
     print(f"shards     {len(all_shards)} files, {human(total_bytes)} of text")
     print(f"output     {args.out}")
     print(f"chunk size {args.chunk_chars:,} chars (peak RAM per worker "
@@ -627,7 +655,7 @@ def main(argv=None) -> int:
         raise SystemExit(f"not enough disk: need ~{human(est_bytes)}, free {human(free)}")
     print(f"disk       {human(free)} free ({est_bytes / free * 100:.1f}% used by this run)")
 
-    tok = BPETokenizer.load(args.vocab)
+    tok = load_vocab(args.vocab)
     workers = max(1, args.workers)
     if workers > 1 and len(all_shards) > 1:
         serial_h = est_tokens / 428_000 / 3600

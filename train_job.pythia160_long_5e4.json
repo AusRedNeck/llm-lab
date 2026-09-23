@@ -1,6 +1,6 @@
 {
   "name": "pythia160-long-5e-4",
-  "desc": "CAPACITY-SERIES LONG RUN (top rung): Pythia-160M shape (12L x 768 x 12H, 162.7M @ 50k untied, our stack) on the full re-encoded OWT 50k stream. LR 5e-4 = winner of the pythia160 probe ladder (val bpb @1000: 5e-4=1.7280 sane, 1e-3=2.4876 and 1.5e-3=2.4878 both diverged to the degenerate plateau ~2.49-2.50, same signature as the known-bad 3e-3 at 70M). Eff batch 64 (8x8, identical to probes so the LR transfers). 20k-step ceiling with exp014's guard (patience-frac 0.15 / min-steps-frac 0.6 / degrade-frac 0.15) so it self-aborts at the knee. This is the third and final rung of the 50k capacity series 70.65M (exp015) -> 113.86M (m50m lineage) -> 162.6M (this run).",
+  "desc": "CAPACITY-SERIES LONG RUN (top rung): Pythia-160M shape (12L x 768 x 12H, 162.7M @ 50k untied, our stack) on the full re-encoded OWT 50k stream. LR 5e-4 = winner of the pythia160 probe ladder (val bpb @1000: 5e-4=1.7280 sane, 1e-3=2.4876 and 1.5e-3=2.4878 both diverged to the degenerate plateau ~2.49-2.50, same signature as the known-bad 3e-3 at 70M). Eff batch 64 (8x8, identical to probes so the LR transfers). 20k-step ceiling with exp014's guard (patience-frac 0.15 / min-steps-frac 0.6 / degrade-frac 0.15) so it self-aborts at the knee. This is the third and final rung of the 50k capacity series 70.65M (exp015) -> 113.86M (m50m/exp014 lineage) -> 162.6M (this run).",
   "ckpt_dir": "checkpoints",
   "stamp": "",
   "run_name": "",

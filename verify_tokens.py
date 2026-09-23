@@ -70,8 +70,12 @@ def main() -> int:
           f"{human(size)} = {n:,} int32 tokens"
           + (f" (+{size % 4} stray bytes!)" if size % 4 else ""))
 
-    tok = BPETokenizer.load(args.vocab)
-    vocab_size = len(tok.vocab)
+    # Same loader the encoder used: a bin must be verified with the exact encoder
+    # that produced it (HF shim for HF vocabs), or round-trip/boundary checks
+    # compare against a slightly different tokenization and report false drift.
+    from tokenize_owt_16k import load_vocab, vocab_len
+    tok = load_vocab(args.vocab)
+    vocab_size = vocab_len(tok)
     arr = memmap_tokens(path)
 
     manifest = read_meta(path + ".manifest.json") if args.manifest else {}

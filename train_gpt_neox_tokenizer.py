@@ -20,6 +20,11 @@ import sys
 import time
 from pathlib import Path
 
+# Same-dir import: the byte->unicode map is the one HF/ByteLevel saves vocab in,
+# and inverting it is how convert_hf_to_bpe.py produces a loadable vocab file.
+sys.path.insert(0, str(Path(__file__).parent))
+from convert_hf_to_bpe import UNI_TO_BYTE, bytes_to_unicode
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -30,19 +35,24 @@ BASE_VOCAB = 256  # byte-level fallback
 
 
 def read_sample_lines(path: Path, sample_mb: int):
-    """Read *sample_mb* MB of text and yield non-empty lines."""
+    """Read *sample_mb* MB of text and yield lines WITH their line endings.
+
+    Do NOT strip here. `strip()` per line is what silently removed every newline
+    and tab from the 200 MB training sample, so the 50k tokenizer never learned
+    a token for those bytes and the encoder DROPS them at encode time
+    ('a\\nb' -> ['a','b'], '\\n\\n' -> []). A tokenizer must be able to represent
+    whatever the corpus contains, so whitespace is training data too.
+    """
     target_bytes = sample_mb * 1024 * 1024
-    count = 0
     chars_read = 0
     with open(path, "rb") as bf:
         while chars_read < target_bytes:
             raw_line = bf.readline()
             if not raw_line:
                 break
-            decoded = raw_line.decode("utf-8", errors="replace").strip()
+            decoded = raw_line.decode("utf-8", errors="replace")
             if decoded:
                 yield decoded
-                count += 1
             chars_read += len(raw_line)
 
 
@@ -89,14 +99,21 @@ def main():
     # Post-processor — none needed for raw id sequences
     tokenizer.post_processor = None
 
-    # Trainer — special tokens must include the 256 byte-level specials
+    # Trainer — the 256 byte-level tokens must be SEEDED, not hoped for.
+    # Without initial_alphabet the trainer only learns bytes that happen to be
+    # frequent enough in the sample, so ~50 byte tokens never exist and the
+    # encoder silently DROPS those bytes (newlines included). Verified: with the
+    # alphabet 256/256 bytes exist and 'a\nb\tc\n\nd' round-trips; without it
+    # 69 are missing and the same string comes back 'abcd'.
     special_tokens = ["[PAD]", "[UNK]", "[BOS]", "[EOS]", "[SEP]", "[MASK]"]
+    initial_alphabet = list(bytes_to_unicode().values())
 
     trainer = trainers.BpeTrainer(
         vocab_size=n_merges + BASE_VOCAB,   # total vocabulary size
         min_frequency=2,                     # skip rare pairs
         show_progress=True,
         special_tokens=special_tokens,
+        initial_alphabet=initial_alphabet,
     )
 
     print(f"Training BPE ({n_merges:,} merges, min_freq=2)...\n")
@@ -114,6 +131,26 @@ def main():
     if hasattr(model, '_merge_rules'):
         n_learned = len(model._merge_rules)
         print(f"  Merge rules learned: {n_learned:,}")
+
+    # --- Verify the alphabet BEFORE saving ---------------------------------
+    # A tokenizer that cannot represent a byte DROPS it silently at encode time,
+    # so this check is the difference between a corpus with paragraphs and one
+    # run together with no document boundaries. Fail loud here, not at step 5,000.
+    vocab_now = tokenizer.get_vocab()
+    have = {UNI_TO_BYTE[c] for c in vocab_now if len(c) == 1 and c in UNI_TO_BYTE}
+    missing = [b for b in range(256) if b not in have]
+    probe = "a\nb\tc\n\nd"
+    rt = tokenizer.decode(tokenizer.encode(probe).ids)
+    print(f"\n  alphabet check: {256 - len(missing)}/256 byte tokens present")
+    if missing or rt != probe:
+        raise SystemExit(
+            f"TOKENIZER REJECTED: {len(missing)} byte tokens missing "
+            f"({missing[:12]}{'...' if len(missing) > 12 else ''}); "
+            f"round-trip {probe!r} -> {rt!r}. "
+            f"An incomplete byte alphabet silently drops data at encode time.")
+    if actual_vocab != args.vocab_size:
+        raise SystemExit(
+            f"TOKENIZER REJECTED: vocab {actual_vocab} != requested {args.vocab_size}")
 
     # --- Save --------------------------------------------------------------
     os.makedirs(args.output_dir, exist_ok=True)
