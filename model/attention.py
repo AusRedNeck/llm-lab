@@ -47,7 +47,7 @@ class CausalSelfAttention(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False,
-                 max_seq: int = 2048, dropout: float = 0.0):
+                 rotary_pct: float = 1.0, max_seq: int = 2048, dropout: float = 0.0):
         super().__init__()
 
         # Every head gets an equal-sized slice of the embedding dimension.
@@ -60,6 +60,7 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
         self.use_rope = use_rope
+        self.rotary_pct = rotary_pct  # fraction of features per head to rotary (Pythia=0.25)
         if use_rope and self.head_dim % 2 != 0:
             raise ValueError("RoPE needs even head_dim")
 
@@ -96,12 +97,23 @@ class MultiHeadAttention(nn.Module):
 
         # Exp 003: rotate queries + keys by position. Values stay unrotated
         # (position belongs in the compatibility score, not the content).
+        # Partial RoPE (GPT-NeoX): rotary_pct controls what fraction of each
+        # head's features get rotated. Pythia uses 0.25 — most features stay
+        # raw, network learns positional dependence instead of having it forced
+        # from step 1. rotary_slice must be even (pair rotation).
+        if self.use_rope and self.rotary_pct < 1.0:
+            rotary_slice = int(round(self.rotary_pct * self.head_dim))
+            if rotary_slice % 2 != 0:
+                rotary_slice += 1  # make even for pair rotation
+            assert rotary_slice >= 2, f"rotary_pct {self.rotary_pct} too small for head_dim {self.head_dim}"
+        else:
+            rotary_slice = -1  # -1 means full (all features)
         if self.use_rope:
             from model.rope import apply_rope, precompute_freqs
             cos, sin = precompute_freqs(self.head_dim, sequence_length,
                                         device=x.device, dtype=torch.float32)
-            q = apply_rope(q, cos, sin)
-            k = apply_rope(k, cos, sin)
+            q = apply_rope(q, cos, sin, rotary_slice=rotary_slice)
+            k = apply_rope(k, cos, sin, rotary_slice=rotary_slice)
 
         # Each head compares every query against every key.
         # [B, H, T, head_dim] @ [B, H, head_dim, T]

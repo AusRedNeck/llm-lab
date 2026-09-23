@@ -6,17 +6,18 @@ from model.attention import MultiHeadAttention
 class TransformerBlock(nn.Module):
     # One layer of thinking: listen to context, then think on your own.
     def __init__(self, embedding_dim: int, num_heads: int, use_rope: bool = False,
-                 dropout: float = 0.0):
+                 rotary_pct: float = 1.0, dropout: float = 0.0):
         super().__init__()
 
         self.attention = MultiHeadAttention(
             embedding_dim=embedding_dim,
             num_heads=num_heads,
             use_rope=use_rope,
+            rotary_pct=rotary_pct,
             dropout=dropout,
         )
-        # Residual dropout: same skip connection, noisier training signal.
-        self.resid_drop = nn.Dropout(dropout)
+        self.attn_drop = nn.Dropout(dropout)
+        self.ffn_drop = nn.Dropout(dropout)
 
         self.norm1 = nn.LayerNorm(embedding_dim)
         self.norm2 = nn.LayerNorm(embedding_dim)
@@ -25,36 +26,19 @@ class TransformerBlock(nn.Module):
             nn.GELU(),
             nn.Linear(embedding_dim * 4, embedding_dim),
         )
-            
 
     def forward(self, x, return_weights: bool = False):
-        # Attention lets each token gather information from
-        # the earlier tokens in the sequence.
+        # Parallel residual (GPT-NeoX style): both branches see the SAME
+        # pre-norm'd input, each is dropout-gated, then summed into x.
+        # This matches EleutherAI/pythia configs (use_parallel_residual=true)
+        # and gives independent additive signals instead of cascade coupling.
+        attn_out = self.attn_drop(self.attention(self.norm1(x),
+                  return_weights=return_weights))
         if return_weights:
-            attention_output, weights = self.attention(x, return_weights=True)
-        else:
-            attention_output = self.attention(x)
-            weights = None
-
-        # Residual connection preserves the original representation
-         # while adding the information produced by attention.
-        output = x + self.resid_drop(attention_output)
-
-        # Keep the representation numerically well-behaved.
-        output = self.norm1(output)
-
-        # The feed-forward network transforms each token's
-        # representation independently after attention has mixed
-        # information between tokens.
-        feed_forward_output = self.feed_forward(output)
-
-        # Second residual connection preserves the representation
-        # while adding the FFN's learned transformation.
-        output = output + self.resid_drop(feed_forward_output)
-
-        # Normalize again before passing the result to the next block.
-        output = self.norm2(output)
+            attn_out, attn_weights = attn_out
+        ff_out = self.ffn_drop(self.feed_forward(self.norm2(x)))
+        output = x + attn_out + ff_out  # Pythia-style: no post-sum norm
 
         if return_weights:
-            return output, weights
+            return output, attn_weights
         return output

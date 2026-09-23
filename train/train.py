@@ -302,6 +302,9 @@ def main():
                     help="held-out tail fraction for closed-book val (default 0.01)")
     ap.add_argument("--use_rope", action="store_true",
                     help="Exp 003: rotary positions instead of learned absolute")
+    ap.add_argument("--rotary-pct", type=float, default=1.0,
+                    help="Fraction of head dims for RoPE (Pythia=0.25). "
+                         "Full RoPE = 1.0 for backward compat.")
     ap.add_argument("--out", default="checkpoints")
     ap.add_argument("--val_every", type=int, default=100,
                     help="eval held-out loss every N steps (0 = off)")
@@ -365,6 +368,7 @@ def main():
         num_heads=cfg.num_heads,
         num_layers=cfg.num_layers,
         use_rope=args.use_rope,
+        rotary_pct=args.rotary_pct,
         dropout=cfg.dropout,
     ).to(device)
     model.train()

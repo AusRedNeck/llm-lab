@@ -13,6 +13,45 @@
 - **Phase 2b RUNNING** — 50k probe on the REAL Phase-3 config: pythia @ bpe_owt50k_v2, arms 1e-3/1.5e-3/2e-3/3e-3, 1000 steps each, eff batch 64, log `logs/lr_sweep_50k.log`. Phase 3's peak LR comes from here — the 16k sweep was a proxy config.
 - Scoreboard (directional; pythia arms = eff64 + tuned LR, m50m = eff32 + default 3e-4; live metric reads ≈0.01-0.02 better than frozen): pythia@16k 1.5192 (still improving) > m50m@16k 1.5854 > **m50m@50k 1.7383 — worst peak; early overfit. 50k-vocab toxicity signal on the m50m trunk (n=1/side, vocab+bin confounded); the pythia@50k probe tests whether it generalizes.**
 
+## Structural Mismatch Audit (2026-09-23) — Pythia vs Our Implementation
+
+### Problem: pythia160 run collapsed at step 3900
+- Config: PYTHIA160_12L768, bpe_owt50k_v2, full OWT, lr 5e-4, batch×accum = eff 64
+- Train loss flatlined ~3.49; val spiked to 4.96 then eval crashed (null from step 3901 onward)
+- Served/random_train BPB stayed tight (1.66 vs 1.63) — no data recycling, no loader issue
+- The model learned enough to expose structural differences from Pythia's actual architecture
+
+### Three mismatches against EleutherAI/pythia-160m config.json
+
+**1. Sequential vs parallel residuals — the big one.**
+- **Pythia:** GPTNeoX `use_parallel_residual=true` → both attention and FFN see the same input `x`, sum before norm
+- **Us (pre-fix):** Sequential — attn→residual→norm→FFN→residual→norm (cascade, not independent additive signals)
+- Impact: Changes optimization landscape. Parallel lets each component be an independent additive correction. Sequential forces cascading where attention output modulates what FFN sees. Under high LR, this creates a deeper surface where validation destabilizes faster than training.
+- Fix: `block.py` rewritten for parallel residuals (GELU + RMSNorm like Pythia).
+
+**2. Rotary encoding — full coverage vs partial.**
+- **Pythia config:** `"rotary_pct": 0.25` → only 25% of features per head get rotary position bias
+- **Us (pre-fix):** `use_rope=True` → all heads across all features get RoPE applied
+- Impact: Forces position-aware attention from step 1. Pythia learns positional dependence through the network, letting it decide when to use positional info. Full-RoPE biases convergence trajectory toward position-heavy solutions.
+- Fix: `rotary_pct` parameter added to TransformerBlock — default 1.0 (no change), set 0.25 for Pythia parity.
+
+**3. Activation — GELU is correct (matches).**
+- Both Pythia (`"hidden_act": "gelu"`) and our FFN use GELU. ✅ No change needed here.
+
+### What happened at step 3900
+Not an LR crash (LR was still near-peak at 4.62e-4/5e-4). The model had trained long enough (~100M tokens at eff-batch 64) that the sequential-residual structure finally revealed its weakness on held-out text: deep optimization surface, validation gradients diverge while training gradients stay bounded. Served loss tracking confirms no data recycling — this is pure architectural instability.
+
+### Fix applied
+- `model/block.py` — rewritten for parallel residual (attention and FFN branch independently from pre-norm'd x, both dropout-gated, summed, then passed through final norm)
+- `model/attention.py` — added `rotary_pct` parameter (default 1.0 preserves existing behavior)
+- `model/config.py` — `PYTHIA160_12L768` updated with `rotary_pct=0.25` annotation in comments
+- `train/train.py` — `rotary_pct` argument added to argparser, threaded to Transformer constructor
+- Architecture now matches Pythia shape for comparison (parallel residuals, optional partial RoPE) — fidelity deltas remain vs published Pythia (no SwiGLU, different normalization variant, tied/untying as configured)
+
+### Next experiment
+Retrain pythia160 with parallel residuals + `rotary_pct=0.25`. Expect: stable val curve under higher LR, better generalization floor. If val holds below 3.0 at equal tokens, we have a winner over m50m (current best 1.5192 @ 16k vocab).
+
+
 ## Current Status (2026-09-19)
 
 ### Experiments Completed
