@@ -1,9 +1,0 @@
-{
-  "status": "stopped-by-rule",
-  "pid": 10436,
-  "checked_at": "2026-09-18T20:45:07",
-  "watchdog_last_step": 7924,
-  "watchdog_last_at": "2026-09-18T20:36:03",
-  "final_step": 8200,
-  "reason": "early-stop guard fired"
-}

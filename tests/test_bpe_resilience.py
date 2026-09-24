@@ -17,7 +17,10 @@ import sys
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+SCRIPTS = os.path.join(ROOT, "scripts")
+for path in (ROOT, SCRIPTS):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 import token_io                                              # noqa: E402
 from model.bpe import BPETokenizer, _SPLIT                    # noqa: E402

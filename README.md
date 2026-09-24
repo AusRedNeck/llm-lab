@@ -17,10 +17,10 @@ Setup
 -----
 After git pull, run:
 
-    bash setup.sh
+    bash scripts/setup.sh
 
 This creates the venv, syncs deps, and installs CUDA torch on Windows.
-Mac just needs `uv sync` (setup.sh handles both).
+Mac just needs `uv sync` (scripts/setup.sh handles both).
 
 To verify CUDA: `uv run python -c "import torch; print(torch.cuda.is_available())"`
 
@@ -142,11 +142,11 @@ Config: same as 010 but with bpe_owt16k tokenizer (16,256 vocab). ~70M params
 (10M of that is the bigger embedding table).
 
 Pipeline (rewritten Sep 18 — the first three attempts all died):
-  run_16k_smoke.bat   rehearsal: 3 shards x 20M chars -> verify -> 200 train steps (~2.5 min)
-  run_16k_full.bat    the real thing: 80 shards, serialized, resumable (~7h)
-  tokenize_owt_16k.py orchestrator (manifest, resume, preflight disk check)
-  token_io.py         streaming encoder + memmap reader (no %TEMP%, no RAM blowup)
-  verify_tokens.py    7 acceptance checks — run before trusting any long encode
+  run scripts/run_16k_smoke.bat   rehearsal: 3 shards x 20M chars -> verify -> 200 train steps (~2.5 min)
+  run scripts/run_16k_full.bat    the real thing: 80 shards, serialized, resumable (~7h)
+  scripts/tokenize_owt_16k.py     orchestrator (manifest, resume, preflight disk check)
+  scripts/token_io.py             streaming encoder + memmap reader (no %TEMP%, no RAM blowup)
+  scripts/verify_tokens.py        7 acceptance checks — run before trusting any long encode
 Train with the .bin:  --tok_cache data/openwebtext_combined_bpe_owt16k.bin
 
 What broke before, and why it can't now:
@@ -202,7 +202,7 @@ you will abort healthy runs and blame the model.
 011c resumes from 011b's keeper (step 2500, val 4.7666 / bpb 1.7013) with
 `--patience-frac 0.15 --min-steps-frac 0.6 --degrade-frac 0.30`, so the earliest a
 plateau can stop it is step 15000, where the LR has decayed to ~7e-5 from 3e-4.
-Launcher: `run_exp011c_train.bat` — its header documents the git-bash invocation
+Launcher: `scripts/run_exp011c_train.bat` — its header documents the git-bash invocation
 trap (`cmd //c foo.bat` silently does nothing; use
 `MSYS_NO_PATHCONV=1 cmd.exe /c "foo.bat"`) and the interpreter trap (bare `python`
 is the CUDA venv; `llm-lab/.venv` is CPU-only torch and will train 50x slower
@@ -265,7 +265,7 @@ nobody watching — see `logs/followup.log` and `logs/16k_tokenize_followup.log`
 NOTE: the first encode exited 1 on purpose (refusing to merge with shards missing).
 
 **16k OWT corpus (original notes):** `data/openwebtext_combined_bpe_owt16k.bin` (raw int32, ~38GB, ~9.46B
-tokens expected). Encoded in parallel (8 worker processes, `run_16k_full_par.bat`),
+tokens expected). Encoded in parallel (8 worker processes, `scripts/run_16k_full_par.bat`),
 ~1.6M tok/s aggregate.
 
 One worker died mid-run to an unreproducible fault in the BPE encoder
@@ -281,8 +281,8 @@ merges in corpus order and verifies. **Outcome is one line in `logs/followup.log
 (VERIFIED OK / VERIFY FAILED / ENCODE INCOMPLETE).
 
 Check progress:  `tail -2 logs/16k_tokenize_par.log`   (status lines every 60s)
-Rerun by hand:   `run_16k_full_par.bat`   (resumable — finished shards are skipped)
-Verify:          `python verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin --vocab data/bpe_owt16k.json --src data/openwebtext/shards/train-00000-of-00080.txt --manifest`
+Rerun by hand:   `scripts/run_16k_full_par.bat`   (resumable — finished shards are skipped)
+Verify:          `python scripts/verify_tokens.py --bin data/openwebtext_combined_bpe_owt16k.bin --vocab data/bpe_owt16k.json --src data/openwebtext/shards/train-00000-of-00080.txt --manifest`
 Tests:           `python -m pytest tests/test_tokenizer_safety.py tests/test_bpe_resilience.py -q`  (16 tests)
 
 **exp 011 line — DONE (2026-09-18 20:43): best bpb 1.5854 @ step 5500, guard fired at
@@ -334,7 +334,7 @@ real damage.
 
 **Curated corpora on disk** (~149GB, fetched 2026-09-18, don't re-download):
 `data/cosmopedia/` (336 parquet, 86 GiB), `data/finewiki/` (15 parquet, 36 GiB, en
-only), `data/open_web_math/` (114 parquet, 26 GiB). Fetch script: `fetch_corpus.py`
+only), `data/open_web_math/` (114 parquet, 26 GiB). Fetch script: `scripts/fetch_corpus.py`
 (validates patterns against the real file list first; resumable). Next big target if
 we want volume: FineWeb-Edu sample-100BT (267GB, ~100B tokens) — but note the cost:
 4 bytes/token means a 373GB file and ~65h of CPU encode single-core (~8h with 8 workers).

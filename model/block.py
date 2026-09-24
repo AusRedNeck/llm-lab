@@ -32,10 +32,14 @@ class TransformerBlock(nn.Module):
         # pre-norm'd input, each is dropout-gated, then summed into x.
         # This matches EleutherAI/pythia configs (use_parallel_residual=true)
         # and gives independent additive signals instead of cascade coupling.
-        attn_out = self.attn_drop(self.attention(self.norm1(x),
-                  return_weights=return_weights))
+        attn_result = self.attention(self.norm1(x), return_weights=return_weights)
         if return_weights:
-            attn_out, attn_weights = attn_out
+            attn_out, attn_weights = attn_result
+        else:
+            attn_out = attn_result
+        # Apply the residual dropout to the tensor, not the (tensor, weights)
+        # capture tuple. The attention module already applies weight dropout.
+        attn_out = self.attn_drop(attn_out)
         ff_out = self.ffn_drop(self.feed_forward(self.norm2(x)))
         output = x + attn_out + ff_out  # Pythia-style: no post-sum norm
 

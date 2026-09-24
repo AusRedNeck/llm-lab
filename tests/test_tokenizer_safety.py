@@ -16,7 +16,10 @@ import time
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+SCRIPTS = os.path.join(ROOT, "scripts")
+for path in (ROOT, SCRIPTS):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 import token_io                                    # noqa: E402
 import tokenize_owt_16k as T                       # noqa: E402
@@ -187,7 +190,7 @@ def test_reap_orphans_kills_only_the_recorded_process(tmp_path):
 
 def test_worker_mode_never_spawns_children(tmp_path):
     """A worker must be a leaf process, or a crashed parent leaves a tree behind."""
-    cmd = [sys.executable, "-u", os.path.join(ROOT, "tokenize_owt_16k.py"),
+    cmd = [sys.executable, "-u", os.path.join(SCRIPTS, "tokenize_owt_16k.py"),
            "--vocab", os.path.join(ROOT, "data", "bpe_owt16k.json"),
            "--shards-dir", os.path.join(ROOT, "data", "openwebtext", "shards"),
            "--out", str(tmp_path / "w.bin"), "--worker-id", "0",
