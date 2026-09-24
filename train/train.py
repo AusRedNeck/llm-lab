@@ -542,6 +542,40 @@ def main():
     SERVED_BUFFER_SIZE = 200  # keep last 200 micro-batches
     served_buffer = []  # list of (x, y) tensors on CPU
 
+    # === METRIC 5: fixed train probe (memorization pair for val) ===
+    # Ten deterministic windows from the TRAIN split, chosen by stride from the file
+    # start, never re-randomized. Scored at every eval. tval - val is the memorization
+    # gap: a healthy run keeps it small and stable; a widening one is fitting the
+    # seen-data instead of learning the distribution (the ~2400-2700 wall we hit in
+    # exp014/exp015/p160-pre-fix was invisible because we only watched train & val raw).
+    probe_pairs = []
+    try:
+        src_probe = train_corpus if train_corpus is not None else corpus
+        if src_probe is not None:
+            n_probe = 10
+            stride = max(1, (len(src_probe) - cfg.context_length - 1) // n_probe)
+            for i in range(n_probe):
+                off = i * stride
+                xs = src_probe[off:off + cfg.context_length]
+                ys = src_probe[off + 1:off + 1 + cfg.context_length]
+                probe_pairs.append((xs.long().to(device), ys.long().to(device)))
+    except Exception:
+        probe_pairs = []
+
+    @torch.no_grad()
+    def eval_probe() -> "float|None":
+        if not probe_pairs:
+            return None
+        model.eval()
+        t = 0.0
+        for x, y in probe_pairs:
+            with torch.amp.autocast("cuda", dtype=autocast_dtype, enabled=use_amp):
+                t += F.cross_entropy(
+                    model(x.unsqueeze(0)).reshape(-1, cfg.vocab_size),
+                    y.reshape(-1)).item()
+        model.train()
+        return t / len(probe_pairs)
+
     @torch.no_grad()
     def eval_three_way(train_data, val_data, served_buf, batches=20):
         """Score: served batches, random train, and val. Returns (served, random_train, val)."""
@@ -689,7 +723,29 @@ def main():
             throughput_tokens = 0  # reset after warmup
 
         scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # METRIC 4 (leading indicators): pre-clip grad norm is the clip return value -- free.
+        gnorm = None
+        try:
+            gnorm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0))
+        except Exception:
+            pass
+        if gnorm is None:  # metrics bug must never kill a run; fall back to plain clip
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # lmax/lstd/ent: last micro-batch's output-distribution shape. Rising logit scale
+        # + collapsing entropy is the pre-collapse signature we were blind to at step 3900
+        # (p160-long-pre-fix). Subsampled for cost; wrapped so it can never kill a run.
+        lmax = lstd = ent = None
+        try:
+            with torch.no_grad():
+                lg = logits.detach().reshape(-1, cfg.vocab_size)
+                if lg.shape[0] > 4096:  # deterministic slice, not randperm: zero sync cost
+                    lg = lg[:4096]
+                lmax = float(lg.max(-1).values.mean())
+                lstd = float(lg.std(-1).mean())
+                lp = torch.log_softmax(lg, dim=-1)
+                ent = float(-(lp.exp() * lp).sum(-1).mean())
+        except Exception:
+            pass
         scaler.step(opt)
         scaler.update()
         loss_val = micro_loss  # accumulated loss (already scaled by 1/accum)
@@ -748,12 +804,29 @@ def main():
                               f"({bad_checks * args.val_every} steps) — "
                               f"best={best_bpb:.4f} @ step {step}")
 
+        # METRIC 5: fixed-train probe, only at val cadence (it's a forward pass)
+        tval = None
+        if probe_pairs and args.val_every and step % args.val_every == 0:
+            try:
+                tval = eval_probe()
+            except Exception:
+                tval = None
+
         running += (loss_val - running) / min(step, 50)
         log_entry = {"step": step, "train": round(loss_val, 4),
                      "avg50": round(running, 4),
                      "val": round(val, 4) if val else None,
                      "val_bpb": round(val_bpb, 5) if val_bpb else None,
                      "lr": lr}
+        # METRIC 4: leading indicators on every step (~free); tval on eval cadence.
+        if gnorm is not None:
+            log_entry["gnorm"] = round(gnorm, 3)
+        if lmax is not None:
+            log_entry["lmax"] = round(lmax, 3)
+            log_entry["lstd"] = round(lstd, 3)
+            log_entry["ent"] = round(ent, 4)
+        if tval is not None:
+            log_entry["tval"] = round(tval, 4)
         # METRIC 2: log three-way eval
         if served_loss is not None:
             log_entry["served"] = round(served_loss, 4)
