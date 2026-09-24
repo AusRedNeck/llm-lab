@@ -43,7 +43,13 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-LAB = os.path.dirname(os.path.abspath(__file__))
+_here = os.path.dirname(os.path.abspath(__file__))
+# The watchdog lives in scripts/ but every path it touches (train_job.json, checkpoints/,
+# logs/, data/) hangs off the repo root. Resolve the root from the script's own location so
+# moving the script between the root and scripts/ cannot silently point SPEC at nothing
+# (2026-09-23: the move made SPEC=scripts/train_job.json, load_json returned {}, and every
+# 10-minute tick died on KeyError 'target_steps' -- the watchdog was off for ~25h).
+LAB = _here if os.path.exists(os.path.join(_here, "train_job.json")) else os.path.dirname(_here)
 SPEC = os.path.join(LAB, "train_job.json")
 TASK = "Hermes_TrainRun"          # parked scheduled task (kept for fallback; direct launch preferred)
 GRACE_MINUTES = 5                 # never relaunch within this window of the last attempt
