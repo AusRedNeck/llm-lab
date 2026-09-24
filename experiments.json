@@ -257,8 +257,8 @@
         "code": "e6a526a parallel residuals + partial RoPE"
       },
       "goal": "Single-lever (architecture parity) re-run of the collapsed 160M arm. Questions: survive step 4000? beat 70M frozen 1.4692?",
-      "verdict": "running",
-      "note": "Attempt 1 (1312) aborted at step 137: watchdog-blind double-launch collision (fixed 7096082). Attempt 2 (1317) live since 13:17. Ladder verdict lands tonight."
+      "verdict": "pass",
+      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure \u2014 clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) \u2014 neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
     },
     {
       "id": "p160-lr-5e-4",
