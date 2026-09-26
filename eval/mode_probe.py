@@ -25,7 +25,52 @@ import torch
 import torch.nn.functional as F
 
 from model.transformer import Transformer
-from train.train import get_batch, get_device, load_token_cache, split_corpus
+
+# NOTE: these mirror train/train.py but live here because train.py only
+# imports torch inside its runner -- its module-level helpers raise
+# NameError when imported standalone. Duplication beats coupling.
+
+
+def get_device():
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.get_device_properties(torch.cuda.current_device())
+            return torch.device("cuda")
+        except Exception:  # noqa: BLE001 -- falls through to MPS/CPU
+            pass
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def get_batch(source: torch.Tensor, batch: int, ctx: int, device, pos: list):
+    # Random crops, same as training. pos is accepted-and-ignored for parity.
+    idx = torch.randint(0, len(source) - ctx - 1, (batch,)).tolist()
+    x = torch.stack([source[i:i + ctx] for i in idx]).long().to(device)
+    y = torch.stack([source[i + 1:i + ctx + 1] for i in idx]).long().to(device)
+    return x, y
+
+
+def load_token_cache(cache_path: str) -> torch.Tensor:
+    # .bin = raw int32 memmap (streams from disk, ~0 RAM). .pt = full load.
+    if cache_path.endswith(".bin"):
+        import numpy as _np
+
+        size = os.path.getsize(cache_path) // 4
+        t = torch.from_numpy(_np.memmap(cache_path, dtype="<i4", mode="r",
+                                        shape=(size,)))
+        print(f"  memmap {cache_path}: {size:,} tokens")
+        return t
+    return torch.load(cache_path, map_location="cpu", weights_only=True)
+
+
+def split_corpus(corpus: torch.Tensor, val_frac: float, ctx: int):
+    # Closed-book tail split, same as training.
+    cut = int(len(corpus) * (1.0 - val_frac))
+    train, val = corpus[:cut], corpus[cut:]
+    if len(val) < ctx + 1:
+        val = None
+    return train, val
 
 
 def score(model, batches, use_amp, dtype) -> list[float]:
@@ -100,7 +145,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
     pos = [0]
     batches = [get_batch(train_data, args.batch, cfg["context_length"],
-                         cfg["vocab_size"], device, pos)
+                         device, pos)
                for _ in range(args.batches)]
 
     model.train()
