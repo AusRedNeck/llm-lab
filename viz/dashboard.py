@@ -115,6 +115,9 @@ def load_runs(runs_dir):
             "params_m": round(header.get("params_m") or 0, 2),
             "preset": args.get("preset"), "lr": args.get("lr"),
             "eff": eff, "ctx": ctx_len,
+            # Coverage denominator (train.py logs it; old runs: None = no epochs).
+            "train_tokens": header.get("train_tokens"),
+            "corpus_tokens": header.get("corpus_tokens"),
             "bpb_factor": bpb_factor,
             "rows": dense,
             "best_bpb": best["val_bpb"] if best else None,
@@ -124,6 +127,30 @@ def load_runs(runs_dir):
             "samples": samples,
         })
     return runs
+
+
+def noise_band(vals):
+    """Check-to-check noise of a val series. Nulls skipped, not zeroed.
+
+    Returns {median, p90, max, n}: absolute step changes across
+    consecutive non-null points. Calibrate --degrade-frac from this,
+    not by feel: genuine memorisation runs ~30x the noise band.
+    """
+    deltas = []
+    prev = None
+    for v in vals:
+        if v is None:
+            continue
+        if prev is not None:
+            deltas.append(abs(v - prev))
+        prev = v
+    if not deltas:
+        return {"median": 0.0, "p90": 0.0, "max": 0.0, "n": 0}
+    ordered = sorted(deltas)
+    n = len(ordered)
+    mid = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
+    p90 = ordered[min(n - 1, int(n * 0.9))]
+    return {"median": mid, "p90": p90, "max": ordered[-1], "n": n}
 
 
 def build_arms(meta_arms, runs_by_name):
@@ -142,6 +169,7 @@ def build_arms(meta_arms, runs_by_name):
             "best_bpb": r["best_bpb"] if r else None,
             "best_step": best_step,
             "best_tokens": (best_step * r["eff"] * r["ctx"]) if (r and best_step) else None,
+            "train_tokens": r["train_tokens"] if r else None,
             "stop_step": r["stop_step"] if r else None,
             "params_m": r["params_m"] if r else None,
             "n_dirs": len(a["run_dirs"]),
@@ -219,7 +247,7 @@ th{background:#161b22;color:#8b949e;position:sticky;top:0}
 const DATA = __DATA__;
 const RUNS = DATA.runs, ARMS = DATA.arms;
 const PAL = ["#f97316","#38bdf8","#a3e635","#e879f9","#facc15","#fb7185","#2dd4bf","#c084fc","#94a3b8","#fda4af"];
-let tokAxis = true, onlySig = true;
+let xmode = 'tokens', onlySig = true;
 let fam = 'ALL';
 try { fam = localStorage.getItem('fam') || 'ALL'; } catch(e){}
 
@@ -233,8 +261,8 @@ const famBox = document.getElementById('famlist');
 famBox.addEventListener('change', e=>{ fam = e.target.value;
   try{ localStorage.setItem('fam', fam); }catch(err){}
   drawArms(); drawAll(); });
-document.getElementById('xmode').onclick = e => { tokAxis=!tokAxis;
-  e.target.textContent = 'axis: '+(tokAxis?'tokens':'steps'); drawAll(); };
+document.getElementById('xmode').onclick = e => { xmode = xmode==='tokens'?'steps':xmode==='steps'?'epochs':'tokens';
+  e.target.textContent = 'axis: '+xmode; drawAll(); };
 document.getElementById('onlysig').onclick = e => { onlySig=!onlySig;
   e.target.textContent = 'show: '+(onlySig?'long arms':'everything'); drawAll(); };
 
@@ -248,9 +276,17 @@ function currentRuns(){
   if (onlySig && fam==='ALL') rs = rs.filter(r => (r.stop_step!=null || r.live) && r.rows.length>200);
   return rs;
 }
-function pts(r, get){ return r.rows.map(e=>[tokAxis ? e.tokens : e.step, get(e,r)]); }
+function xOf(r, e){
+  // epochs = tokens / train_tokens. No denominator (old runs) falls back to tokens.
+  if (xmode==='steps') return e.step;
+  if (xmode==='epochs' && r.train_tokens) return e.tokens / r.train_tokens;
+  return e.tokens;
+}
+function pts(r, get){ return r.rows.map(e=>[xOf(r,e), get(e,r)]); }
 const bpbOf = k => (e,r)=>{ const f=r.bpb_factor, v=e[k]; return (v==null||f==null)?null:v*f; };
 
+function xMaxLabel(xmax){ return xmode==='epochs' ? xmax.toFixed(2)+' ep'
+  : xmode==='steps' ? xmax+' steps' : (xmax/1e6).toFixed(0)+'M tok'; }
 function panel(cv, series, label){
   const ctx = cv.getContext('2d'), W=cv.width, H=cv.height, P=52;
   ctx.clearRect(0,0,W,H);
@@ -264,7 +300,7 @@ function panel(cv, series, label){
   const span=(hi-lo)||Math.abs(hi)||1; lo-=span*0.06; hi+=span*0.06;
   const X=x=>P+(x/xmax)*(W-P-12), Y=v=>H-22-(v-lo)/(hi-lo)*(H-34);
   ctx.fillText(hi.toFixed(2),4,16); ctx.fillText(lo.toFixed(2),4,H-24);
-  ctx.fillText(tokAxis? (xmax/1e6).toFixed(0)+'M tok' : xmax+' steps', W-130, H-8);
+  ctx.fillText(xMaxLabel(xmax), W-130, H-8);
   for(let g=1;g<4;g++){ const gx=P+(W-P-12)*g/4;
     ctx.strokeStyle='#161b22'; ctx.beginPath(); ctx.moveTo(gx,8); ctx.lineTo(gx,H-22); ctx.stroke(); }
   series.forEach(s=>{
@@ -310,7 +346,7 @@ function drawArms(){
       <td>${a.params_m?a.params_m.toFixed? a.params_m.toFixed(1):a.params_m:''}</td>
       <td>${a.best_bpb?a.best_bpb.toFixed(4):'—'}</td>
       <td>${a.best_step||'—'}</td>
-      <td>${a.best_tokens?(a.best_tokens/1e6).toFixed(0)+'M':'—'}</td>
+      <td>${a.best_tokens?((a.best_tokens/1e6).toFixed(0)+'M'+(a.train_tokens?' ('+(a.best_tokens/a.train_tokens).toFixed(2)+'ep)':'')):'—'}</td>
       <td>${a.stop_step?(''+a.stop_step):''}</td>
       <td>${a.control||''}</td>
       <td style="max-width:280px">${Object.entries(a.lever).filter(([k])=>k!=='note').map(([k,v])=>`<code>${k}</code>: ${v}`).join('<br>')}</td>

@@ -172,3 +172,18 @@ PYTHIA_6L512 = ModelConfig(
     num_heads=8,
     dropout=0.1,
 )
+
+# M70 class, built for the Pythia-70M fight (~66M at 4k vocab).
+# d=704/11H = 64/head, same clean math as the M50M. Depth over width:
+# 10 layers carries further per token than 6 wide ones at this scale.
+# Honest asymmetry vs EleutherAI/pythia-70m-deduped: theirs is ~50M
+# embeddings (50k vocab) + ~19M transformer; ours is ~6M embeddings
+# + ~60M transformer. Same weight class, more engine. STATE section 21+.
+M66M_10L704 = ModelConfig(
+    vocab_size=4512,      # overridden from bpe_owt4k file at runtime
+    context_length=512,
+    embedding_dim=704,
+    num_layers=10,
+    num_heads=11,
+    dropout=0.1,          # keep — it earned its place in 006
+)
