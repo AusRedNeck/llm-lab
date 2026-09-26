@@ -338,3 +338,31 @@ only), `data/open_web_math/` (114 parquet, 26 GiB). Fetch script: `scripts/fetch
 (validates patterns against the real file list first; resumable). Next big target if
 we want volume: FineWeb-Edu sample-100BT (267GB, ~100B tokens) — but note the cost:
 4 bytes/token means a 373GB file and ~65h of CPU encode single-core (~8h with 8 workers).
+
+### Viz — training dashboard upgrade (Sep 26, 2026)
+`viz/dashboard.py` rebuilds `viz/training.html` (offline, zero deps, inline JSON).
+Two passes landed, TDD'd (`tests/test_dashboard.py`, 5 tests):
+
+**Pass 1 — bpb-first + null-gap rendering:**
+- Default series `val_bpb` (fair across vocabs; raw loss lied in exp 011).
+  Toggle order: val_bpb, val, avg50, train.
+- Null spans render red dashed `eval gap A-B` on the axis; trailing null
+  renders `eval dead from N` (the 160M @3901 signature). Line end vs
+  deliberate stop now look different.
+- Early-stop marker: green tick + best bpb (deliberate end, not a crash).
+
+**Pass 2 — LR strip + guard line + three-way panel:**
+- LR strip (default on): peak-normalised schedule fill under the top edge.
+  Flat val at high LR = schedule, keep going. Flat val at decayed LR = knee.
+  (The 011 schedule confusion, made visible.)
+- Guard line: red dashed at best bpb x (1 + degrade_frac) from the run header,
+  val_bpb mode only. Abort threshold visible against the wobble — calibrate by eye.
+- 3-way toggle (default off): yellow dashed served bpb + teal dashed
+  random-train bpb. Tight = loader healthy (like the 160M: 1.66 vs 1.63).
+  Served diving = recycling, kill the run.
+
+Buttons: `series`, `linear/log`, `lr on/off`, `3-way on/off`. Per-run checkboxes,
+sample viewer unchanged.
+Rebuild: `uv run python viz/dashboard.py [--watch N] [--runs runs]`.
+NOTE: local runs lack bpb/three-way fields (those curves live on Ronin);
+a fresh local build stays thin until Ronin curves land. `training.html` not rebuilt.

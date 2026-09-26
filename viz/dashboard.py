@@ -36,6 +36,9 @@ def load_runs(runs_dir):
         if not d.is_dir() or not f.exists():
             continue
         header, steps, train, avg, val = {}, [], [], [], []
+        val_bpb, lrs = [], []
+        served_bpb, random_train_bpb = [], []
+        early_stop = None
         try:
             lines = f.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -48,12 +51,23 @@ def load_runs(runs_dir):
             if i == 0 and "args" in row:  # first line is the run header
                 header = row
                 continue
+            if row.get("early_stop"):
+                # Deliberate end marker, not a data row. Keep separate
+                # so the audit and the UI read it, not the curve.
+                early_stop = {"step": row.get("step"),
+                              "best_bpb": row.get("best_bpb"),
+                              "best_val": row.get("best_val")}
+                continue
             if "step" not in row or "train" not in row:
-                continue  # early_stop marker or junk -- skip
+                continue  # junk -- skip
             steps.append(row["step"])
             train.append(row["train"])
             avg.append(row.get("avg50"))
             val.append(row.get("val"))
+            val_bpb.append(row.get("val_bpb"))
+            lrs.append(row.get("lr"))
+            served_bpb.append(row.get("served_bpb"))
+            random_train_bpb.append(row.get("random_train_bpb"))
         # Samples: stepN.txt files, oldest first. Text inlined, escaped later.
         samples = []
         sdir = d / "samples"
@@ -72,8 +86,12 @@ def load_runs(runs_dir):
                     continue
         if steps:
             runs.append({"name": d.name, "params_m": header.get("params_m"),
+                         "args": header.get("args", {}),
                          "steps": steps, "train": train, "avg50": avg,
-                         "val": val, "samples": samples})
+                         "val": val, "val_bpb": val_bpb, "lr": lrs,
+                         "served_bpb": served_bpb,
+                         "random_train_bpb": random_train_bpb,
+                         "early_stop": early_stop, "samples": samples})
     return runs
 
 
@@ -110,17 +128,21 @@ button,select{background:#1c2330;color:#e6edf3;border:1px solid #30363d;border-r
 <div id="runs"></div>
 <canvas id="cv" width="1200" height="340"></canvas>
 <div class="row">
-<button id="mode">series: avg50</button>
+<button id="mode">series: val_bpb</button>
 <button id="scale">scale: linear</button>
+<button id="lr">lr: on</button>
+<button id="threeway">3-way: off</button>
 <label>samples: <select id="which"></select></label>
 <label>step: <select id="step"></select></label>
 </div>
+<div id="legend" style="font-size:12px;color:#8b949e;margin-bottom:8px"></div>
 <div id="sample">pick a run to hear it learning.</div>
 <script>
 const RUNS = __DATA__;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const PAL = ["#f97316","#38bdf8","#a3e635","#e879f9","#facc15","#fb7185","#2dd4bf","#c084fc"];
-let mode = 'avg50', log = false;  // toggle train/raw vs smoothed, linear vs log
+let mode = 'val_bpb', log = false;  // bpb first: fair metric across vocabs
+let showLr = true, showThree = false;
 // One checkbox per run; all on by default.
 const box = document.getElementById('runs');
 RUNS.forEach((r, i) => {
@@ -130,17 +152,24 @@ RUNS.forEach((r, i) => {
 });
 box.addEventListener('change', draw);
 document.getElementById('mode').onclick = e => {
-  mode = mode === 'avg50' ? 'train' : mode === 'train' ? 'val' : 'avg50';
+  mode = mode === 'val_bpb' ? 'val' : mode === 'val' ? 'avg50' : mode === 'avg50' ? 'train' : 'val_bpb';
   e.target.textContent = 'series: ' + mode; draw();
 };
 document.getElementById('scale').onclick = e => {
   log = !log; e.target.textContent = 'scale: ' + (log ? 'log' : 'linear'); draw();
 };
+document.getElementById('lr').onclick = e => {
+  showLr = !showLr; e.target.textContent = 'lr: ' + (showLr ? 'on' : 'off'); draw();
+};
+document.getElementById('threeway').onclick = e => {
+  showThree = !showThree; e.target.textContent = '3-way: ' + (showThree ? 'on' : 'off'); draw();
+};
 function active() {
   return [...box.querySelectorAll('input:checked')].map(c => RUNS[+c.dataset.i]);
 }
 function draw() {
-  // Min/max over visible series, then plot. Nulls (no val yet) skipped.
+  // Min/max over visible series, then plot. Nulls break the pen so
+  // eval-death gaps (160M @3901) render as red dashes, not silence.
   const rs = active(), W = cv.width, H = cv.height, P = 44;
   ctx.clearRect(0, 0, W, H);
   let lo = Infinity, hi = -Infinity, xmax = 0;
@@ -159,16 +188,103 @@ function draw() {
   ctx.fillStyle = '#8b949e'; ctx.font = '11px system-ui';
   ctx.fillText(hi.toFixed(2), 4, 18); ctx.fillText(lo.toFixed(2), 4, H - 28);
   ctx.fillText('step ' + xmax, W - 90, H - 10);
+  // LR strip: peak-normalised fill under the top edge. Flat val at high
+  // LR reads "schedule, keep going". Flat val at decayed LR reads "knee".
+  if (showLr) {
+    rs.forEach(r => {
+      if (!r.lr || !r.lr.length) return;
+      let peak = 0;
+      r.lr.forEach(v => { if (v != null && v > peak) peak = v; });
+      if (!peak) return;
+      ctx.fillStyle = PAL[RUNS.indexOf(r) % PAL.length] + '22';
+      ctx.beginPath();
+      r.steps.forEach((s, i) => {
+        const v = r.lr[i]; if (v == null) return;
+        const x = X(s), y = 8 + (1 - v / peak) * 28;
+        i === 0 ? ctx.moveTo(x, 8) : ctx.lineTo(x, y);
+      });
+      const lastS = r.steps[r.steps.length - 1];
+      ctx.lineTo(X(lastS), 8); ctx.closePath(); ctx.fill();
+    });
+  }
+  // Guard line: best bpb * (1 + degrade_frac) from the run header.
+  // Val crossing it mid-schedule fires the abort. Noise band check by eye.
   rs.forEach(r => {
-    ctx.strokeStyle = PAL[RUNS.indexOf(r) % PAL.length]; ctx.lineWidth = 1.6;
+    const df = r.args && r.args.degrade_frac;
+    if (df == null || mode !== 'val_bpb') return;
+    let best = Infinity;
+    r.val_bpb.forEach(v => { if (v != null && v < best) best = v; });
+    if (!isFinite(best)) return;
+    const g = best * (1 + df), gy = Y(g);
+    if (gy < 8 || gy > H - 26) return;
+    ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1; ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(P, gy); ctx.lineTo(W - 8, gy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#e74c3c'; ctx.font = '10px system-ui';
+    ctx.fillText('guard +' + (df * 100).toFixed(0) + '% (' + g.toFixed(3) + ')', P + 4, gy - 3);
+  });
+  rs.forEach(r => {
+    const col = PAL[RUNS.indexOf(r) % PAL.length];
+    ctx.strokeStyle = col; ctx.lineWidth = 1.6;
     ctx.beginPath(); let pen = false;
     r.steps.forEach((s, i) => {
-      const v = r[mode][i]; if (v == null) return;
+      const v = r[mode][i];
+      if (v == null) { pen = false; return; }
       const x = X(s), y = Y(v);
       pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true;
     });
     ctx.stroke();
+    // Red dashed bridge across each null span: eval died here.
+    ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+    let gs = null;
+    r.steps.forEach((s, i) => {
+      if (r[mode][i] == null && gs == null) gs = s;
+      if (r[mode][i] != null && gs != null) {
+        ctx.beginPath(); ctx.moveTo(X(gs), H - 26); ctx.lineTo(X(s), H - 26); ctx.stroke();
+        ctx.fillStyle = '#e74c3c'; ctx.font = '10px system-ui';
+        ctx.fillText('eval gap ' + gs + '-' + s, X(gs) + 2, H - 32);
+        gs = null;
+      }
+    });
+    // Trailing gap: line died and never came back (160M signature).
+    if (gs != null) {
+      ctx.beginPath(); ctx.moveTo(X(gs), H - 26); ctx.lineTo(X(xmax), H - 26); ctx.stroke();
+      ctx.fillStyle = '#e74c3c'; ctx.font = '10px system-ui';
+      ctx.fillText('eval dead from ' + gs, X(gs) + 2, H - 32);
+    }
+    ctx.setLineDash([]);
+    // Early-stop flag: deliberate end, green tick, not a gap.
+    if (r.early_stop && r.early_stop.step != null) {
+      const ex = X(r.early_stop.step);
+      ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(ex, 8); ctx.lineTo(ex, H - 26); ctx.stroke();
+      ctx.fillStyle = '#2ecc71'; ctx.font = '10px system-ui';
+      const bl = r.early_stop.best_bpb != null ? ' best bpb ' + r.early_stop.best_bpb : '';
+      ctx.fillText('stop' + bl, ex + 3, 18);
+    }
+    // Three-way: served vs random-train bpb. Tight means loader healthy.
+    // Served diving below random_train means recycling: kill the run.
+    if (showThree && (mode === 'val_bpb' || mode === 'val')) {
+      const sKey = mode === 'val_bpb' ? 'served_bpb' : 'served';
+      const tKey = mode === 'val_bpb' ? 'random_train_bpb' : 'random_train';
+      [[sKey, '#facc15'], [tKey, '#2dd4bf']].forEach(([k, c]) => {
+        if (!r[k]) return;
+        ctx.strokeStyle = c; ctx.lineWidth = 1.1; ctx.setLineDash([2, 2]);
+        ctx.beginPath(); let pen = false;
+        r.steps.forEach((s, i) => {
+          const v = r[k][i]; if (v == null) { pen = false; return; }
+          const x = X(s), y = Y(v);
+          pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true;
+        });
+        ctx.stroke(); ctx.setLineDash([]);
+      });
+    }
   });
+  // Legend line under the canvas.
+  const lg = document.getElementById('legend');
+  lg.textContent = showThree
+    ? 'yellow dashed = served bpb (loader replay) / teal dashed = random-train bpb / tight = healthy, served diving = recycling'
+    : '';
 }
 // Sample viewer: run dropdown -> step dropdown -> raw text.
 const which = document.getElementById('which'), step = document.getElementById('step'),
