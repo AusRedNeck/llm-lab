@@ -35,13 +35,13 @@ import torch.nn.functional as F
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, PYTHIA160_12L768, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
+from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, M66M_10L704, PYTHIA160_12L768, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
 from model.transformer import Transformer
 
 PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "s12m": S12M_6L384, "s17m": S17M_6L384,
-           "m50m": M50M_10L640, "m50m_1k": M50M_10L640_1K,
+           "m50m": M50M_10L640, "m50m_1k": M50M_10L640_1K, "m66m": M66M_10L704,
            "m52m": M52M_10L640, "m60m": M60M_10L640,
            "pythia": PYTHIA_6L512,
            "pythia160": PYTHIA160_12L768,
@@ -437,6 +437,7 @@ def main():
 
     corpus = None
     train_corpus, val_corpus = None, None
+    unit = None
     corpus_label = args.data
     if args.corpus:
         # Generic path: any file or dir. Same closed-book tail split.
@@ -499,7 +500,25 @@ def main():
     fresh = (not reuse_run) or not os.path.exists(log_path) or os.path.getsize(log_path) == 0
     log_f = open(log_path, "a" if reuse_run else "w")
     if fresh:
-        json.dump({"args": vars(args), "cfg": vars(cfg), "params_m": cfg.num_params() / 1e6},
+        # Corpus coverage: denominator for tokens_seen / train_tokens = epochs.
+        # Random sampling reuses data, so epochs can exceed 1 — that IS the signal
+        # (Chinchilla: ~20 tok/param; our 111M looked starved at single digits).
+        _unit = unit or ("tokens" if tok is not None else "bytes")
+        try:
+            _corpus_n = int(len(corpus)) if corpus is not None else None
+        except TypeError:
+            _corpus_n = None
+        try:
+            _train_n = int(len(train_corpus)) if train_corpus is not None else _corpus_n
+        except TypeError:
+            _train_n = _corpus_n
+        try:
+            _val_n = int(len(val_corpus)) if val_corpus is not None else None
+        except TypeError:
+            _val_n = None
+        json.dump({"args": vars(args), "cfg": vars(cfg), "params_m": cfg.num_params() / 1e6,
+                   "corpus_tokens": _corpus_n, "train_tokens": _train_n,
+                   "val_tokens": _val_n, "unit": _unit},
                   log_f)
         log_f.write("\n")
     print(f"  run dir: {run_path}{' (resumed - appending)' if reuse_run else ''}")
@@ -644,6 +663,7 @@ def main():
     # A resumed run INHERITS this ledger: it used to reset to inf on every resume, so a
     # long run that restarted repeatedly lost its divergence guard each time.
     best_bpb, bad_checks = float("inf"), 0
+    recycle_hits = 0  # consecutive recycling tripwire hits (needs 2 past step 100)
     if resume_best_bpb:
         best_bpb, bad_checks = resume_best_bpb, resume_bad_checks
         print(f"  early-stop ledger inherited: best_bpb={best_bpb:.4f} "
@@ -708,12 +728,21 @@ def main():
             print(f"  three-way: served={served_loss:.4f} "
                   f"random_train={random_train_loss:.4f} val={val:.4f} "
                   f"(bpb: {served_bpb:.4f} / {random_train_bpb:.4f} / {val_bpb:.4f})")
-            # TRIPWIRE: data recycling detection
-            if served_loss < random_train_loss - 0.3:
-                print(f"\n  !!! DATA RECYCLING DETECTED !!!")
-                print(f"  served={served_loss:.4f} < random_train={random_train_loss:.4f} - 0.3")
-                print(f"  Stopping. The loader is recycling data.")
-                stop = True
+            # TRIPWIRE: data recycling detection. Gated three ways:
+            # warmup (early batches are noisy, served buffer not full),
+            # bpb margin (fair across vocabs), consecutive hits (one noisy
+            # check never kills a run -- the 160M smoke proved that).
+            if step >= 100:
+                if served_bpb is not None and served_bpb < random_train_bpb - 0.15:
+                    recycle_hits += 1
+                    if recycle_hits >= 2:
+                        print(f"\n  !!! DATA RECYCLING DETECTED !!!")
+                        print(f"  served_bpb={served_bpb:.4f} < random_train_bpb={random_train_bpb:.4f} - 0.15")
+                        print(f"  (2 consecutive checks, past step 100)")
+                        print(f"  Stopping. The loader is recycling data.")
+                        stop = True
+                else:
+                    recycle_hits = 0
             if patience_checks > 0:
                 if val_bpb < best_bpb - args.min_delta:
                     # New best: snapshot it, reset strikes.

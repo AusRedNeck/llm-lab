@@ -112,6 +112,9 @@ def load_runs(runs_dir):
         if steps:
             runs.append({"name": d.name, "params_m": header.get("params_m"),
                          "args": header.get("args", {}),
+                         "train_tokens": header.get("train_tokens"),
+                         "corpus_tokens": header.get("corpus_tokens"),
+                         "unit": header.get("unit", "tokens"),
                          "steps": steps, "train": train, "avg50": avg,
                          "val": val, "val_bpb": val_bpb, "lr": lrs,
                          "served_bpb": served_bpb,
@@ -218,7 +221,8 @@ document.getElementById('threeway').onclick = e => {
   showThree = !showThree; e.target.textContent = '3-way: ' + (showThree ? 'on' : 'off'); draw();
 };
 document.getElementById('xaxis').onclick = e => {
-  xTokens = !xTokens; e.target.textContent = 'x: ' + (xTokens ? 'tokens' : 'step'); draw();
+  xTokens = xTokens === false ? true : xTokens === true ? 'epochs' : false;
+  e.target.textContent = 'x: ' + (xTokens === 'epochs' ? 'epochs' : xTokens ? 'tokens' : 'step'); draw();
 };
 function active() {
   return [...box.querySelectorAll('input:checked')].map(c => RUNS[+c.dataset.i]);
@@ -229,8 +233,16 @@ function draw() {
   // X axis: step or tokens-seen. Step lies across vocabs. Tokens never lie.
   const rs = active(), W = cv.width, H = cv.height, P = 44;
   ctx.clearRect(0, 0, W, H);
-  const Xv = (r, i) => (xTokens && r.tokens_seen && r.tokens_seen[i] != null)
-    ? r.tokens_seen[i] : r.steps[i];
+  // X axis: step, tokens-seen, or epochs (tokens / train_tokens).
+  // Epochs can exceed 1: random sampling with replacement reuses data.
+  // Old runs without train_tokens fall back to tokens, then step.
+  const Xv = (r, i) => {
+    const ts = r.tokens_seen && r.tokens_seen[i];
+    if (xTokens === 'epochs' && ts != null && r.train_tokens)
+      return ts / r.train_tokens;
+    if (xTokens && ts != null) return ts;
+    return r.steps[i];
+  };
   let lo = Infinity, hi = -Infinity, xmax = 0;
   rs.forEach(r => r.steps.forEach((s, i) => {
     const v = r[mode][i]; if (v == null) return;
@@ -246,7 +258,8 @@ function draw() {
   ctx.moveTo(P, 8); ctx.lineTo(P, H - 26); ctx.lineTo(W - 8, H - 26); ctx.stroke();
   ctx.fillStyle = '#8b949e'; ctx.font = '11px system-ui';
   ctx.fillText(hi.toFixed(2), 4, 18); ctx.fillText(lo.toFixed(2), 4, H - 28);
-  ctx.fillText('step ' + xmax, W - 90, H - 10);
+  const xLabel = xTokens === 'epochs' ? 'ep ' + xmax.toFixed(2) : (xTokens ? 'tok ' + (xmax / 1e6).toFixed(1) + 'M' : 'step ' + xmax);
+  ctx.fillText(xLabel, W - 90, H - 10);
   // LR strip: peak-normalised fill under the top edge. Flat val at high
   // LR reads "schedule, keep going". Flat val at decayed LR reads "knee".
   if (showLr) {
@@ -366,7 +379,13 @@ function draw() {
     const lastMem = r.peak_mem_mb ? r.peak_mem_mb.filter(v => v != null).pop() : null;
     const lastTs = r.tokens_seen && r.tokens_seen[n - 1] != null ? r.tokens_seen[n - 1] : null;
     let bits = [`<span class="sw" style="background:${col}"></span><b>${r.name}</b> step ${lastStep}`];
-    if (lastTs != null) bits.push((lastTs / 1e6).toFixed(1) + 'M tok');
+    if (lastTs != null) {
+      let tokBit = (lastTs / 1e6).toFixed(1) + 'M tok';
+      // Coverage: epochs of the train split seen. >1 means reuse (expected:
+      // random sampling with replacement). No train_tokens (old runs) = no epochs.
+      if (r.train_tokens) tokBit += ` (${(lastTs / r.train_tokens).toFixed(2)}ep of ${(r.train_tokens / 1e6).toFixed(0)}M)`;
+      bits.push(tokBit);
+    }
     if (lastTps != null) {
       bits.push((lastTps / 1000).toFixed(0) + 'k tok/s');
       const rate = lastTps;
