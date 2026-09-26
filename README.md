@@ -366,3 +366,9 @@ sample viewer unchanged.
 Rebuild: `uv run python viz/dashboard.py [--watch N] [--runs runs]`.
 NOTE: local runs lack bpb/three-way fields (those curves live on Ronin);
 a fresh local build stays thin until Ronin curves land. `training.html` not rebuilt.
+
+**Pass 3 — noise band (Sep 26):**
+- Blue shaded band around best bpb: median check-to-check change x4 each side.
+  Guard line should sit well clear of the wobble. Overlap = miscalibrated guard
+  (the 011b kill: threshold inside noise; genuine divergence runs ~30x noise).
+- `noise_band(vals)` helper in dashboard.py, skips nulls. 2 more tests, 10 green.

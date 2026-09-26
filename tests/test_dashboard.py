@@ -1,6 +1,6 @@
 import json
 
-from viz.dashboard import load_runs
+from viz.dashboard import load_runs, noise_band
 
 
 def _write_run(tmp_path, name, rows):
@@ -73,3 +73,18 @@ def test_load_runs_keeps_guard_args(tmp_path):
     runs = load_runs(str(tmp_path))
     assert len(runs) == 1
     assert runs[0]["args"]["degrade_frac"] == 0.30
+
+
+def test_noise_band_measures_check_to_check():
+    # Steady climb: median step change small vs total rise.
+    vals = [1.70, 1.71, 1.70, 1.72, 1.71, 1.73, 1.74, 1.75]
+    band = noise_band(vals)
+    assert band["median"] < 0.02
+    assert band["max"] < 0.03
+    assert band["n"] == 7
+
+
+def test_noise_band_ignores_nulls():
+    vals = [1.70, None, 1.72, None, 1.71]
+    band = noise_band(vals)
+    assert band["n"] == 2

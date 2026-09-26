@@ -95,6 +95,30 @@ def load_runs(runs_dir):
     return runs
 
 
+def noise_band(vals):
+    """Check-to-check noise of a val series. Nulls skipped, not zeroed.
+
+    Returns {median, p90, max, n}: absolute step changes across
+    consecutive non-null points. Calibrate --degrade-frac from this,
+    not by feel: genuine memorisation runs ~30x the noise band.
+    """
+    deltas = []
+    prev = None
+    for v in vals:
+        if v is None:
+            continue
+        if prev is not None:
+            deltas.append(abs(v - prev))
+        prev = v
+    if not deltas:
+        return {"median": 0.0, "p90": 0.0, "max": 0.0, "n": 0}
+    ordered = sorted(deltas)
+    n = len(ordered)
+    mid = ordered[n // 2] if n % 2 else (ordered[n // 2 - 1] + ordered[n // 2]) / 2
+    p90 = ordered[min(n - 1, int(n * 0.9))]
+    return {"median": mid, "p90": p90, "max": ordered[-1], "n": n}
+
+
 def build(runs_dir, out=OUT):
     """Rebuild the HTML. Data inlined as JSON so file:// just works."""
     runs = load_runs(runs_dir)
@@ -212,10 +236,26 @@ function draw() {
   rs.forEach(r => {
     const df = r.args && r.args.degrade_frac;
     if (df == null || mode !== 'val_bpb') return;
-    let best = Infinity;
-    r.val_bpb.forEach(v => { if (v != null && v < best) best = v; });
+    let best = Infinity, bestI = -1;
+    r.val_bpb.forEach((v, i) => { if (v != null && v < best) { best = v; bestI = i; } });
     if (!isFinite(best)) return;
     const g = best * (1 + df), gy = Y(g);
+    // Noise band: median check-to-check change x4 each side of best.
+    // Guard should sit well clear of the wobble. Overlap means miscalibrated.
+    let deltas = [];
+    for (let i = 1; i <= bestI; i++) {
+      const a = r.val_bpb[i - 1], b = r.val_bpb[i];
+      if (a != null && b != null) deltas.push(Math.abs(b - a));
+    }
+    deltas.sort((a, b) => a - b);
+    const med = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 0;
+    if (med > 0) {
+      const top = Y(best - med * 4), bot = Y(best + med * 4);
+      ctx.fillStyle = '#38bdf822';
+      ctx.fillRect(P, Math.min(top, bot), W - 8 - P, Math.abs(bot - top));
+      ctx.fillStyle = '#38bdf8'; ctx.font = '10px system-ui';
+      ctx.fillText('noise x4 (' + (med * 4).toFixed(4) + ')', P + 4, Math.max(top, bot) + 11);
+    }
     if (gy < 8 || gy > H - 26) return;
     ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1; ctx.setLineDash([6, 4]);
     ctx.beginPath(); ctx.moveTo(P, gy); ctx.lineTo(W - 8, gy); ctx.stroke();
