@@ -1,78 +1,95 @@
+"""Tests for viz/dashboard.py v2 (decision board) + coverage epochs graft.
+
+v2 shape: load_runs -> run dicts with dense `rows` ({step, tokens, ...}),
+run-level eff/ctx/train_tokens, best_bpb/best_step/stop_step. Epochs =
+tokens / train_tokens (header field from train.py).
+"""
 import json
 
-from viz.dashboard import load_runs, noise_band
+from viz.dashboard import build_arms, load_runs, noise_band
 
 
-def _write_run(tmp_path, name, rows):
+def _write_run(tmp_path, name, header_extra=None, rows=()):
     d = tmp_path / name
     (d / "samples").mkdir(parents=True)
+    header = {"args": {"preset": "s17m", "batch": 32, "accum": 1},
+              "cfg": {"context_length": 512}, "params_m": 17.0}
+    header.update(header_extra or {})
     with open(d / "loss.jsonl", "w", encoding="utf-8") as f:
-        f.write(json.dumps({"args": {"preset": "s17m"}, "cfg": {}, "params_m": 17.0}) + "\n")
+        f.write(json.dumps(header) + "\n")
         for r in rows:
             f.write(json.dumps(r) + "\n")
     return d
 
 
-def test_load_runs_includes_val_bpb(tmp_path):
-    _write_run(tmp_path, "run_a", [
-        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.86, "val_bpb": 1.7271, "lr": 3e-4},
-        {"step": 200, "train": 4.8, "avg50": 4.9, "val": 4.76, "val_bpb": 1.7013, "lr": 2.8e-4},
+def test_rows_carry_tokens_per_step(tmp_path):
+    _write_run(tmp_path, "run_a", rows=[
+        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.86, "val_bpb": 1.7271},
+        {"step": 200, "train": 4.8, "avg50": 4.9, "val": 4.76, "val_bpb": 1.7013},
     ])
     runs = load_runs(str(tmp_path))
     assert len(runs) == 1
-    assert runs[0]["val_bpb"] == [1.7271, 1.7013]
+    toks = [e["tokens"] for e in runs[0]["rows"]]
+    assert toks == [100 * 32 * 512, 200 * 32 * 512]
 
 
-def test_load_runs_preserves_null_val_gap(tmp_path):
-    _write_run(tmp_path, "run_gap", [
-        {"step": 100, "train": 3.5, "avg50": 3.5, "val": 4.96, "val_bpb": 1.8, "lr": 4.6e-4},
-        {"step": 200, "train": 3.49, "avg50": 3.49, "val": None, "lr": 4.6e-4},
-        {"step": 300, "train": 3.49, "avg50": 3.49, "val": None, "lr": 4.6e-4},
+def test_null_val_gap_preserved(tmp_path):
+    _write_run(tmp_path, "run_gap", rows=[
+        {"step": 100, "train": 3.5, "avg50": 3.5, "val": 4.96, "val_bpb": 1.8},
+        {"step": 200, "train": 3.49, "avg50": 3.49, "val": None},
     ])
     runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    assert runs[0]["val"] == [4.96, None, None]
-    assert runs[0]["val_bpb"][1] is None
+    assert runs[0]["rows"][1].get("val") is None
+    assert runs[0]["best_bpb"] == 1.8
+    assert runs[0]["best_step"] == 100
 
 
-def test_load_runs_captures_early_stop(tmp_path):
-    _write_run(tmp_path, "run_stop", [
-        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.8, "val_bpb": 1.7, "lr": 3e-4},
+def test_early_stop_row_marks_stop_step(tmp_path):
+    _write_run(tmp_path, "run_stop", rows=[
+        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.8, "val_bpb": 1.7},
         {"early_stop": True, "step": 8200, "best_bpb": 1.5854},
     ])
     runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    assert runs[0]["early_stop"]["step"] == 8200
-    assert runs[0]["early_stop"]["best_bpb"] == 1.5854
+    assert runs[0]["stop_step"] == 8200
 
 
-def test_load_runs_harvests_three_way(tmp_path):
-    _write_run(tmp_path, "run_3way", [
-        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.8, "val_bpb": 1.7,
-         "served": 4.7, "served_bpb": 1.66, "random_train": 4.75,
-         "random_train_bpb": 1.68, "lr": 3e-4},
-        {"step": 200, "train": 4.8, "avg50": 4.9, "val": 4.76, "val_bpb": 1.69,
-         "served": 4.65, "served_bpb": 1.64, "random_train": 4.7,
-         "random_train_bpb": 1.66, "lr": 2.8e-4},
+def test_train_tokens_passthrough_for_epochs(tmp_path):
+    _write_run(tmp_path, "run_cov",
+               header_extra={"train_tokens": 536786585,
+                             "corpus_tokens": 542208672},
+               rows=[
+                   {"step": 100, "train": 5.0, "avg50": 5.1,
+                    "val": 4.8, "val_bpb": 1.7},
+               ])
+    runs = load_runs(str(tmp_path))
+    r = runs[0]
+    assert r["train_tokens"] == 536786585
+    # epochs math the JS does: tokens / train_tokens
+    ep = r["rows"][-1]["tokens"] / r["train_tokens"]
+    assert ep == 100 * 32 * 512 / 536786585
+
+
+def test_missing_train_tokens_means_no_epochs(tmp_path):
+    _write_run(tmp_path, "run_old", rows=[
+        {"step": 100, "train": 5.0, "avg50": 5.1, "val": 4.8, "val_bpb": 1.7},
     ])
     runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    assert runs[0]["served_bpb"] == [1.66, 1.64]
-    assert runs[0]["random_train_bpb"] == [1.68, 1.66]
+    assert runs[0]["train_tokens"] is None
 
 
-def test_load_runs_keeps_guard_args(tmp_path):
-    d = tmp_path / "run_guard"
-    (d / "samples").mkdir(parents=True)
-    with open(d / "loss.jsonl", "w", encoding="utf-8") as f:
-        f.write(json.dumps({"args": {"preset": "m50m", "degrade_frac": 0.30,
-                                     "min_steps_frac": 0.6},
-                            "cfg": {}, "params_m": 55.0}) + "\n")
-        f.write(json.dumps({"step": 100, "train": 5.0, "avg50": 5.1,
-                            "val": 4.8, "val_bpb": 1.7, "lr": 3e-4}) + "\n")
+def test_arms_row_carries_epochs_denominator(tmp_path):
+    _write_run(tmp_path, "run_arm",
+               header_extra={"train_tokens": 1000000},
+               rows=[
+                   {"step": 100, "train": 5.0, "avg50": 5.1,
+                    "val": 4.8, "val_bpb": 1.7},
+               ])
     runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    assert runs[0]["args"]["degrade_frac"] == 0.30
+    by_name = {r["name"]: r for r in runs}
+    arms, _problems = build_arms([{"id": "a1", "family": "f",
+                                    "run_dirs": ["run_arm"]}], by_name)
+    assert arms[0]["train_tokens"] == 1000000
+    assert arms[0]["best_tokens"] == 100 * 32 * 512
 
 
 def test_noise_band_measures_check_to_check():
@@ -88,29 +105,3 @@ def test_noise_band_ignores_nulls():
     vals = [1.70, None, 1.72, None, 1.71]
     band = noise_band(vals)
     assert band["n"] == 2
-
-
-def test_load_runs_harvests_throughput(tmp_path):
-    _write_run(tmp_path, "run_tps", [
-        {"step": 100, "train": 5.0, "avg50": 5.1, "val": None, "lr": 3e-4,
-         "tok_per_sec": 42000.0, "peak_mem_mb": 12500.0},
-        {"step": 200, "train": 4.8, "avg50": 4.9, "val": 4.76, "val_bpb": 1.69, "lr": 2.8e-4},
-    ])
-    runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    assert runs[0]["tok_per_sec"] == [42000.0, None]
-    assert runs[0]["peak_mem_mb"] == [12500.0, None]
-
-
-def test_load_runs_computes_tokens_seen(tmp_path):
-    d = tmp_path / "run_tok"
-    (d / "samples").mkdir(parents=True)
-    with open(d / "loss.jsonl", "w", encoding="utf-8") as f:
-        f.write(json.dumps({"args": {"preset": "pythia160", "batch": 8, "accum": 2},
-                            "cfg": {"context_length": 512}, "params_m": 162.6}) + "\n")
-        f.write(json.dumps({"step": 100, "train": 5.0, "avg50": 5.1, "lr": 3e-4}) + "\n")
-        f.write(json.dumps({"step": 200, "train": 4.8, "avg50": 4.9, "lr": 2.8e-4}) + "\n")
-    runs = load_runs(str(tmp_path))
-    assert len(runs) == 1
-    # tokens_seen = step * batch * accum * ctx
-    assert runs[0]["tokens_seen"] == [100 * 8 * 2 * 512, 200 * 8 * 2 * 512]

@@ -1,0 +1,311 @@
+{
+  "_schema": "One row per ARM, registry era begins 2026-09-21 (legacy_cutoff); earlier run dirs are 'legacy' and only listed on demand. run_dirs = launch attempts (newest last). lever = the arg changes claimed vs control; viz/registry.py re-derives the REAL normalized diff (eff_batch = batch*accum, vocab = tokenizer+bin pair, 'steps'/guards excluded) and flags undeclared/unchanged/confounded. accepted_confounded=true = multi-lever by necessity, verdict is directional only. code = non-header lever (model change in git). verdict: running|pass|fail|flat|inconclusive|aborted|superseded|closed.",
+  "arms": [
+    {
+      "id": "ctx1024-exp013",
+      "family": "context-length",
+      "run_dirs": [
+        "20260919_1344_m50m_1k_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "m50m-16k-ref",
+      "lever": {
+        "preset": "m50m -> m50m_1k (ctx 512->1024)",
+        "batch": "32x2 -> 8x2 (VRAM-forced eff 64->16)",
+        "note": "eff_batch move forced by ctx 2x VRAM; arm inconclusive anyway"
+      },
+      "goal": "Does 1024 ctx beat 512 at equal tokens on the m50m trunk?",
+      "verdict": "inconclusive",
+      "note": "OOM history around this arm; exp013 config was corrected mid-flight. Never produced a clean verdict.",
+      "accepted_confounded": true
+    },
+    {
+      "id": "m50m-16k-ref",
+      "family": "reference",
+      "run_dirs": [
+        "20260919_1433_m50m_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": null,
+      "lever": {
+        "note": "reference run: m50m trunk, 16k tokenizer, eff64"
+      },
+      "goal": "Reference curve for the 16k era (scoreboard 1.5854 directional).",
+      "verdict": "closed",
+      "note": "Used as control for exp014; era ended when the 50k stream landed."
+    },
+    {
+      "id": "pythia16k-lr-6e-4",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260919_1611_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": null,
+      "lever": {
+        "lr": 0.0006
+      },
+      "goal": "16k LR ladder rung (2500 steps, eff64).",
+      "verdict": "closed",
+      "note": "1.6483 bpb @2500."
+    },
+    {
+      "id": "pythia16k-lr-1e-3",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260919_1625_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "pythia16k-lr-6e-4",
+      "lever": {
+        "lr": 0.001
+      },
+      "goal": "16k LR ladder rung.",
+      "verdict": "closed",
+      "note": "1.5728 bpb @2500."
+    },
+    {
+      "id": "pythia16k-lr-15e-4",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260919_1638_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "pythia16k-lr-1e-3",
+      "lever": {
+        "lr": 0.0015
+      },
+      "goal": "16k LR ladder rung.",
+      "verdict": "closed",
+      "note": "1.5433 bpb @2500."
+    },
+    {
+      "id": "pythia16k-lr-2e-3",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260919_1655_pythia_rope_bpe_owt16k_openwebtext_combined",
+        "20260919_1656_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "pythia16k-lr-15e-4",
+      "lever": {
+        "lr": 0.002
+      },
+      "goal": "16k LR ladder rung (one dead attempt + rerun).",
+      "verdict": "closed",
+      "note": "1.5271 bpb @2500."
+    },
+    {
+      "id": "pythia16k-lr-3e-3",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260922_1241_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "pythia16k-lr-2e-3",
+      "lever": {
+        "lr": 0.003
+      },
+      "goal": "16k LR ladder rung; winner.",
+      "verdict": "pass",
+      "note": "1.5192 bpb @2500, still improving when ladder closed. 4e-3 (20260922_1519) broke the curve: 1.7433."
+    },
+    {
+      "id": "pythia16k-lr-4e-3",
+      "family": "pythia16k-lr-ladder",
+      "run_dirs": [
+        "20260922_1519_pythia_rope_bpe_owt16k_openwebtext_combined"
+      ],
+      "control_id": "pythia16k-lr-3e-3",
+      "lever": {
+        "lr": 0.004
+      },
+      "goal": "16k LR ladder rung (beyond bracket).",
+      "verdict": "fail",
+      "note": "1.7433 \u2014 past the knee, ladder bracketed at 3e-3."
+    },
+    {
+      "id": "p50k-lr-1e-3",
+      "family": "pythia50k-70m-lr-probe",
+      "run_dirs": [
+        "20260922_1345_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260922_2358_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": null,
+      "lever": {
+        "lr": 0.001
+      },
+      "goal": "50k 70M LR probe (1000 steps, eff64).",
+      "verdict": "closed",
+      "note": "1.7406 bpb @1000."
+    },
+    {
+      "id": "p50k-lr-15e-4",
+      "family": "pythia50k-70m-lr-probe",
+      "run_dirs": [
+        "20260922_1355_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260922_1453_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260923_0011_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p50k-lr-1e-3",
+      "lever": {
+        "lr": 0.0015
+      },
+      "goal": "50k 70M LR probe; winner of the ladder.",
+      "verdict": "pass",
+      "note": "1.6953 bpb @1000. Attempt 1 (1355) was ^C'd at step 528 by the 14:00 app update -> launch rule born here (detach everything)."
+    },
+    {
+      "id": "p50k-lr-2e-3",
+      "family": "pythia50k-70m-lr-probe",
+      "run_dirs": [
+        "20260922_1504_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260923_0024_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p50k-lr-15e-4",
+      "lever": {
+        "lr": 0.002
+      },
+      "goal": "50k 70M LR probe rung.",
+      "verdict": "closed",
+      "note": "1.7466 \u2014 worse than 1.5e-3, curve turning."
+    },
+    {
+      "id": "p50k-lr-3e-3",
+      "family": "pythia50k-70m-lr-probe",
+      "run_dirs": [
+        "20260922_1512_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260923_0048_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p50k-lr-2e-3",
+      "lever": {
+        "lr": 0.003
+      },
+      "goal": "50k 70M LR probe rung (bracket test).",
+      "verdict": "fail",
+      "note": "2.5025 \u2014 degenerate plateau, ladder bracketed, 1.5e-3 selected for exp015."
+    },
+    {
+      "id": "exp014-m50m-50k",
+      "family": "capacity-50k",
+      "run_dirs": [
+        "20260921_2301_m50m_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "m50m-16k-ref",
+      "lever": {
+        "vocab": "bpe_owt16k -> bpe_owt50k_v2 (tokenizer+bin)",
+        "eff_batch": "64 -> 32 (16x2, VRAM-forced)"
+      },
+      "goal": "Vocab axis: 113.9M trunk on the 50k stream.",
+      "verdict": "fail",
+      "note": "1.7256 best @2700, early-stopped 5900. WORST of trio. BUT the 16k control ran eff64 vs this eff32 -> vocab-toxicity conclusion is directional only, not clean. Checker caught this backfill error 2026-09-23.",
+      "accepted_confounded": true
+    },
+    {
+      "id": "exp015-pythia-50k",
+      "family": "capacity-50k",
+      "run_dirs": [
+        "20260922_1912_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260922_1918_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p50k-lr-15e-4",
+      "lever": {
+        "dropout": "null -> 0.1 declared (NO-OP: preset default was already 0.1)",
+        "note": "long extension of the winning probe arm"
+      },
+      "goal": "Capacity axis rung 1: SMALLER trunk on 50k \u2014 is the m50m failure shape-specific?",
+      "verdict": "pass",
+      "note": "Best 1.4699 @12000 (frozen audit 1.4692), stopped 15000. Clean successor of the 1.5e-3 probe (same preset/lr/eff/vocab). Its superiority vs exp014 is the confounded preset+lr+eff_batch comparison across those two arms \u2014 see exp014 note.",
+      "accepted_confounded": true
+    },
+    {
+      "id": "p160-long-pre-fix",
+      "family": "capacity-50k",
+      "run_dirs": [
+        "20260923_0628_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "exp015-pythia-50k",
+      "lever": {
+        "preset": "pythia -> pythia160",
+        "lr": "1.5e-3 -> 5e-4 (probe-picked)",
+        "dropout": "0.1 -> null (NO-OP: preset default 0.1)",
+        "note": "eff_batch held at 64 (16x4 -> 8x8, VRAM detail only)"
+      },
+      "goal": "Capacity axis rung 3: does 2.3x params beat the 70M?",
+      "verdict": "fail",
+      "note": "1.5572 @2400; collapse ~3900; stopped 5800. Lost to 70M. Size+LR moved together by necessity (probe-selected LR for new size). Triggered the structural audit.",
+      "accepted_confounded": true
+    },
+    {
+      "id": "p160-fix-validation",
+      "family": "capacity-50k",
+      "run_dirs": [
+        "20260923_1258_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p160-long-pre-fix",
+      "lever": {
+        "rotary_pct": "absent(1.0) -> 0.25",
+        "code": "e6a526a parallel residuals + partial RoPE"
+      },
+      "goal": "200-step smoke: does the fixed stack train cleanly?",
+      "verdict": "pass",
+      "note": "rc=0, loss 10.96->6.70, three-way bpb tight, 26.1k tok/s, 8.5GB peak. Green light for the long arm."
+    },
+    {
+      "id": "p160-fix-long",
+      "family": "capacity-50k",
+      "run_dirs": [
+        "20260923_1312_pythia160_rope_bpe_owt50k_v2_openwebtext_combined",
+        "20260923_1317_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p160-long-pre-fix",
+      "lever": {
+        "rotary_pct": "absent(1.0) -> 0.25",
+        "code": "e6a526a parallel residuals + partial RoPE"
+      },
+      "goal": "Single-lever (architecture parity) re-run of the collapsed 160M arm. Questions: survive step 4000? beat 70M frozen 1.4692?",
+      "verdict": "pass",
+      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure \u2014 clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) \u2014 neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
+    },
+    {
+      "id": "p160-lr-5e-4",
+      "family": "pythia160-lr-probe",
+      "run_dirs": [
+        "20260922_2320_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": null,
+      "lever": {
+        "lr": 0.0005
+      },
+      "goal": "160M LR probe (1000 steps, eff64).",
+      "verdict": "pass",
+      "note": "1.7280 bpb @1000 \u2014 only sane rung; selected for the long arms."
+    },
+    {
+      "id": "p160-lr-1e-3",
+      "family": "pythia160-lr-probe",
+      "run_dirs": [
+        "20260922_2342_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p160-lr-5e-4",
+      "lever": {
+        "lr": 0.001
+      },
+      "goal": "160M LR probe rung.",
+      "verdict": "fail",
+      "note": "2.4876 \u2014 degenerate plateau."
+    },
+    {
+      "id": "p160-lr-15e-4",
+      "family": "pythia160-lr-probe",
+      "run_dirs": [
+        "20260923_0015_pythia160_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p160-lr-1e-3",
+      "lever": {
+        "lr": 0.0015
+      },
+      "goal": "160M LR probe rung.",
+      "verdict": "fail",
+      "note": "2.4878 \u2014 same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack \u2014 open question."
+    }
+  ],
+  "legacy_cutoff": "20260921",
+  "ignore_dirs": [
+    "smoke_50k_pythia_m50m",
+    "_abandoned_stubs_2026-09-15"
+  ]
+}
