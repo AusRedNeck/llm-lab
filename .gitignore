@@ -13,4 +13,6 @@ runs/
 train_job*.json
 *.out
 logs/
+.train.lock
+.train-watchdog.lock
 .DS_Store

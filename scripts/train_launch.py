@@ -20,9 +20,37 @@ import subprocess
 import sys
 from datetime import datetime
 
-LAB = os.path.dirname(os.path.abspath(__file__))
+LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = os.path.join(LAB, "train_job.json")
 STATE = os.path.join(LAB, "train_job.state.json")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from train_watchdog import running_trainers
+
+
+def read_state(path=STATE):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def preflight_reason(spec, state_path=None):
+    """Why this launcher must NOT start a trainer, or None if launch is safe.
+
+    Order matters: a quarantined job is refused BEFORE probing processes, so a
+    quarantined tick never even inspects the process table.
+    """
+    st = read_state(state_path or STATE)
+    if st.get("status") == "quarantined":
+        return "job quarantined"
+    trainers, can_tell = running_trainers()
+    if not can_tell:
+        return "cannot inspect trainers"
+    if trainers:
+        return "trainer already alive"
+    return None
 
 
 def load_spec(path=SPEC):
@@ -57,6 +85,10 @@ def build_cmd(spec, ckpt):
 def main():
     dry = "--dry-run" in sys.argv
     spec = load_spec()
+    reason = preflight_reason(spec)
+    if reason:
+        print(f"not launching: {reason}")
+        return 1
     step, ckpt = newest_ckpt(spec)
     cmd = build_cmd(spec, ckpt)
     print(f"job={spec['name']} target={spec['target_steps']} steps")

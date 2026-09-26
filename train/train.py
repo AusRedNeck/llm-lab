@@ -29,15 +29,18 @@ import math
 import os
 import sys
 
-import torch
-import torch.nn.functional as F
+# NOTE: torch and model.transformer are deliberately NOT imported here.
+# train.train runs on a machine-wide singleton lock (train/runtime_lock.py) so two
+# trainers can never share one GPU. The lock must be acquired BEFORE torch/CUDA
+# initialises, so those imports live at the top of _train(), after main() holds
+# the lock. model.config and model.bpe are torch-free and stay top-level so that
+# PRESETS and the pure-python helpers remain importable without torch.
 
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, PYTHIA160_12L768, PYTHIA_6L512, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
-from model.transformer import Transformer
 
 PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "s12m": S12M_6L384, "s17m": S17M_6L384,
@@ -346,6 +349,23 @@ def main():
                     help="checkpoint .pt to resume from (model + optimizer restored, steps continue to --steps)")
     args = ap.parse_args()
 
+    from train.runtime_lock import acquire_train_lock
+    lock = acquire_train_lock(owner={"preset": args.preset, "lr": args.lr})
+    try:
+        return _train(args)
+    finally:
+        lock.release()
+
+
+def _train(args):
+    # Heavy imports happen HERE, after main() holds the singleton lock -- importing
+    # torch (or model.transformer, which imports torch) initialises CUDA, and a
+    # second trainer must be refused before it touches the GPU. Declared global so
+    # the module-level helpers (get_device, get_batch, ...) resolve them.
+    global torch, F, Transformer
+    import torch
+    import torch.nn.functional as F
+    from model.transformer import Transformer
     cfg = PRESETS[args.preset]
     if args.dropout is not None:
         # CLI wins: one variable per run, preset stays the control.

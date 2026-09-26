@@ -306,6 +306,8 @@
   "legacy_cutoff": "20260921",
   "ignore_dirs": [
     "smoke_50k_pythia_m50m",
-    "_abandoned_stubs_2026-09-15"
+    "_abandoned_stubs_2026-09-15",
+    "20260924_2059_pythia160_bpe_owt50k_v2_openwebtext_combined",
+    "20260924_2101_pythia160_bpe_owt50k_v2_openwebtext_combined"
   ]
 }
