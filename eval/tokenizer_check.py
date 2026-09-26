@@ -29,7 +29,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import torch
 
 from model.bpe import BPETokenizer
-from train.train import load_token_cache, val_bytes_per_token
+
+# load_token_cache lives in mode_probe: train.py's copy is unusable
+# standalone (torch only exists inside its runner). val_bytes_per_token
+# never touches the torch module, so it stays imported from train.
+from eval.mode_probe import load_token_cache
+from train.train import val_bytes_per_token
 
 
 def corpus_stats(ids: torch.Tensor, tok: BPETokenizer, tag: str,
