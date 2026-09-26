@@ -51,6 +51,7 @@ _here = os.path.dirname(os.path.abspath(__file__))
 # 10-minute tick died on KeyError 'target_steps' -- the watchdog was off for ~25h).
 LAB = _here if os.path.exists(os.path.join(_here, "train_job.json")) else os.path.dirname(_here)
 SPEC = os.path.join(LAB, "train_job.json")
+WATCHDOG_LOCK_PATH = os.path.join(LAB, ".train-watchdog.lock")
 TASK = "Hermes_TrainRun"          # parked scheduled task (kept for fallback; direct launch preferred)
 GRACE_MINUTES = 5                 # never relaunch within this window of the last attempt
 STRIKE_LIMIT = 2                  # consecutive no-progress deaths before giving up
@@ -70,6 +71,15 @@ def launch_direct(spec, spec_path=None):
     Relaunches RESUME from the job's newest step ckpt (fresh when none is newer than the
     spec) -- without this a crash burned the run's whole compute history on restart.
     """
+    trainers, can_tell = running_trainers()
+    if not can_tell:
+        print("[watchdog] GLOBAL PREFLIGHT BLIND: cannot inspect trainers; refusing launch")
+        return False
+    if trainers:
+        pids = [getattr(p, "pid", p) for p in trainers]
+        print(f"[watchdog] GLOBAL PREFLIGHT BLOCKED: trainer already alive "
+              f"(pid={pids}); refusing launch")
+        return False
     cmd = [spec["python"], "-u", "-m", "train.train"] + list(spec["train_args"])
     resume = newest_step_ckpt(spec, spec_path)
     if resume:
@@ -115,6 +125,83 @@ def save_state(st, path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(st, f, indent=2)
 
+
+def _iter_psutil_processes():
+    import psutil
+    return psutil.process_iter(["pid", "name", "cmdline"])
+
+
+class TrainerProbeError(RuntimeError):
+    pass
+
+
+def _is_trainer(process):
+    info = getattr(process, "info", None) or {}
+    name = info.get("name")
+    if not isinstance(name, str):
+        candidate = getattr(process, "name", "")
+        try:
+            name = candidate() if callable(candidate) else candidate
+        except Exception as exc:
+            raise TrainerProbeError("cannot read process name") from exc
+    if not isinstance(name, str):
+        return False
+    name = name.lower()
+    if not name.startswith("python"):
+        return False
+    args = info.get("cmdline")
+    if args is None:
+        candidate = getattr(process, "cmdline", None)
+        try:
+            args = candidate() if callable(candidate) else candidate
+        except Exception as exc:
+            raise TrainerProbeError("cannot read process command line") from exc
+    if not isinstance(args, (list, tuple)):
+        raise TrainerProbeError("invalid process command line")
+    args = [str(arg).lower() for arg in args]
+    return any(args[i] == "-m" and args[i + 1] == "train.train"
+               for i in range(len(args) - 1))
+
+
+def _running_trainers_wmic():
+    query = ("Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
+             "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }")
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True, text=True, timeout=60)
+    except Exception:
+        return [], False
+    if result.returncode != 0:
+        return [], False
+    found = []
+    for line in result.stdout.splitlines():
+        pid_text, _, cmdline = line.partition("\t")
+        if "-m train.train" not in cmdline.lower():
+            continue
+        try:
+            found.append(int(pid_text.strip()))
+        except ValueError:
+            continue
+    return found, True
+
+
+def running_trainers():
+    """Return every live llm-lab trainer, independent of the active job match."""
+    try:
+        processes = list(_iter_psutil_processes())
+    except ImportError:
+        return _running_trainers_wmic()
+    except Exception:
+        return [], False
+    found = []
+    for process in processes:
+        try:
+            if _is_trainer(process):
+                found.append(process)
+        except TrainerProbeError:
+            return [], False
+    return found, True
 
 def running_process(spec):
     """The first PYTHON process whose cmdline contains every spec['match'] substring.
@@ -396,6 +483,26 @@ def task_exists(task=TASK):
 
 
 def main():
+    """Single watchdog tick, serialized against overlapping ticks.
+
+    Cron fires every 10 minutes and a slow tick can overlap the next one; two
+    watchdogs judging the same dead job both relaunch it. The first tick holds
+    the watchdog lock, the second exits 0 without doing anything.
+    """
+    if LAB not in sys.path:
+        sys.path.insert(0, LAB)
+    from train.runtime_lock import acquire_watchdog_lock
+    try:
+        lock = acquire_watchdog_lock(WATCHDOG_LOCK_PATH)
+    except Exception:
+        return 0
+    try:
+        return _main_locked()
+    finally:
+        lock.release()
+
+
+def _main_locked():
     dry = "--dry-run" in sys.argv
     quiet = "--quiet" in sys.argv        # cron passes this: healthy runs print nothing
     spec_path = SPEC
@@ -445,7 +552,7 @@ def main():
     # A latched verdict means we already said the true thing about this run. Re-deriving it
     # every 10 minutes is how one finished run produced 121 failed cron ticks and 121
     # undeliverable alerts; a finished run is not a recurring failure.
-    if st.get("status") in TERMINAL:
+    if st.get("status") in TERMINAL or st.get("status") == "quarantined":
         if not spec.get("completed") and not dry:
             spec["completed"] = True
             with open(spec_path, "w", encoding="utf-8") as f:
