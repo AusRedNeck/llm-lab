@@ -339,3 +339,58 @@ What remains is real and worth knowing: **6 checkpoint families have weights but
 ### Curated corpora on disk
 
 ~149GB, fetched 2026-09-18, don't re-download: `data/cosmopedia/` (336 parquet, 86 GiB), `data/finewiki/` (15 parquet, 36 GiB, en only), `data/open_web_math/` (114 parquet, 26 GiB). Fetch script: `scripts/fetch_corpus.py` (validates patterns against the real file list first; resumable). Next big target if we want volume: FineWeb-Edu sample-100BT (267GB, ~100B tokens) — but note the cost: 4 bytes/token means a 373GB file and ~65h of CPU encode single-core (~8h with 8 workers).
+
+### Viz passes 1–5 (Sep 26, pre-v2 board history — v2 keeps the ideas)
+
+Passes 1–4 (bpb-first, null-gap rendering, LR strip + guard line, three-way
+panel, noise band, throughput cards, token axis, coverage epochs) were built
+against the old board and TDD'd (`tests/test_dashboard.py`). The v2 decision
+board (registry arms, stability/loader panels) supersedes the layout but keeps
+the substance: bpb-first, guard-abort marker, loader recycling panel, token
+axis — plus epochs (`axis: epochs`, `@tok (x.xxep)` in the arms table) from
+the `train_tokens` run-header field. Old-board details below for the record:
+`viz/dashboard.py` rebuilds `viz/training.html` (offline, zero deps, inline JSON).
+Two passes landed, TDD'd (`tests/test_dashboard.py`, 5 tests):
+
+**Pass 1 — bpb-first + null-gap rendering:**
+- Default series `val_bpb` (fair across vocabs; raw loss lied in exp 011).
+  Toggle order: val_bpb, val, avg50, train.
+- Null spans render red dashed `eval gap A-B` on the axis; trailing null
+  renders `eval dead from N` (the 160M @3901 signature). Line end vs
+  deliberate stop now look different.
+- Early-stop marker: green tick + best bpb (deliberate end, not a crash).
+
+**Pass 2 — LR strip + guard line + three-way panel:**
+- LR strip (default on): peak-normalised schedule fill under the top edge.
+  Flat val at high LR = schedule, keep going. Flat val at decayed LR = knee.
+  (The 011 schedule confusion, made visible.)
+- Guard line: red dashed at best bpb x (1 + degrade_frac) from the run header,
+  val_bpb mode only. Abort threshold visible against the wobble — calibrate by eye.
+- 3-way toggle (default off): yellow dashed served bpb + teal dashed
+  random-train bpb. Tight = loader healthy (like the 160M: 1.66 vs 1.63).
+  Served diving = recycling, kill the run.
+
+Buttons: `series`, `linear/log`, `lr on/off`, `3-way on/off`. Per-run checkboxes,
+sample viewer unchanged.
+Rebuild: `uv run python viz/dashboard.py [--watch N] [--runs runs]`.
+NOTE: local runs lack bpb/three-way fields (those curves live on Ronin);
+a fresh local build stays thin until Ronin curves land. `training.html` not rebuilt.
+
+**Pass 3 — noise band (Sep 26):**
+- Blue shaded band around best bpb: median check-to-check change x4 each side.
+  Guard line should sit well clear of the wobble. Overlap = miscalibrated guard
+  (the 011b kill: threshold inside noise; genuine divergence runs ~30x noise).
+- `noise_band(vals)` helper in dashboard.py, skips nulls. 2 more tests, 10 green.
+
+**Pass 4 — training finish: throughput + equal-token axis + alerts (Sep 26):**
+- Trainer writes a `{"throughput": true, "tok_per_sec", "peak_mem_mb"}` row
+  after the warmup window. Parser attaches it to the nearest step.
+  Status cards show rate + peak mem + ETA (from tokens_seen delta).
+  MPS reports rate only (unified memory, no separate gauge).
+- X-axis toggle: step vs tokens-seen (step x batch x accum x ctx from header).
+  Step lies across vocabs/batches. Tokens never lie. All overlays (curves,
+  gaps, stops, three-way) follow the axis.
+- Alerts per run: GUARD TRIPPED / guard near (val_bpb vs degrade_frac),
+  EVAL DEAD (trailing nulls), RECYCLING? (served vs random-train gap).
+- Smoke-proven: s17m 135-step MPS run, 9.3k tok/s attached correctly.
+  `noise_band` helper + 7 dashboard tests, 12 green total.

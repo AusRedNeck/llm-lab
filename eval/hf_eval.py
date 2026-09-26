@@ -90,6 +90,9 @@ def eval_hf_model(model_name: str, val_text: str, max_samples: int = 500,
         "val_loss": avg_nats,
         "perplexity": ppl,
         "nats_per_byte": nats_per_byte,
+        # bits/byte: the lab's house unit (train.py bpb_factor). Same number,
+        # no more nats-vs-bits mixups when lining up against our runs.
+        "bpb": nats_per_byte * math.log2(math.e),
         "bytes_per_token": bytes_per_token,
         "total_tokens": total_tokens,
         "samples": count,
@@ -120,6 +123,7 @@ def main():
         print(f"    val_loss (nats/token): {r['val_loss']:.4f}")
         print(f"    perplexity:            {r['perplexity']:.2f}")
         print(f"    nats_per_byte:         {r['nats_per_byte']:.4f}")
+        print(f"    bpb (bits/byte):       {r['bpb']:.4f}")
         print(f"    bytes_per_token:       {r['bytes_per_token']:.2f}")
         print(f"    device:                {r['device']}")
 
