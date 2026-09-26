@@ -372,3 +372,16 @@ a fresh local build stays thin until Ronin curves land. `training.html` not rebu
   Guard line should sit well clear of the wobble. Overlap = miscalibrated guard
   (the 011b kill: threshold inside noise; genuine divergence runs ~30x noise).
 - `noise_band(vals)` helper in dashboard.py, skips nulls. 2 more tests, 10 green.
+
+**Pass 4 — training finish: throughput + equal-token axis + alerts (Sep 26):**
+- Trainer writes a `{"throughput": true, "tok_per_sec", "peak_mem_mb"}` row
+  after the warmup window. Parser attaches it to the nearest step.
+  Status cards show rate + peak mem + ETA (from tokens_seen delta).
+  MPS reports rate only (unified memory, no separate gauge).
+- X-axis toggle: step vs tokens-seen (step x batch x accum x ctx from header).
+  Step lies across vocabs/batches. Tokens never lie. All overlays (curves,
+  gaps, stops, three-way) follow the axis.
+- Alerts per run: GUARD TRIPPED / guard near (val_bpb vs degrade_frac),
+  EVAL DEAD (trailing nulls), RECYCLING? (served vs random-train gap).
+- Smoke-proven: s17m 135-step MPS run, 9.3k tok/s attached correctly.
+  `noise_band` helper + 7 dashboard tests, 12 green total.

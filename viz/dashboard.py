@@ -38,7 +38,9 @@ def load_runs(runs_dir):
         header, steps, train, avg, val = {}, [], [], [], []
         val_bpb, lrs = [], []
         served_bpb, random_train_bpb = [], []
+        tok_per_sec, peak_mem_mb, tokens_seen = [], [], []
         early_stop = None
+        pending_tps, pending_mem = None, None
         try:
             lines = f.read_text(encoding="utf-8").splitlines()
         except OSError:
@@ -58,6 +60,17 @@ def load_runs(runs_dir):
                               "best_bpb": row.get("best_bpb"),
                               "best_val": row.get("best_val")}
                 continue
+            if row.get("throughput"):
+                # Throughput probe row: rate + mem gauge, no loss.
+                # Attach to the nearest logged step so the viz cards read it.
+                tps = row.get("tok_per_sec")
+                mem = row.get("peak_mem_mb")
+                if steps and tps is not None:
+                    tok_per_sec[-1] = tps
+                    peak_mem_mb[-1] = mem
+                else:
+                    pending_tps, pending_mem = tps, mem
+                continue
             if "step" not in row or "train" not in row:
                 continue  # junk -- skip
             steps.append(row["step"])
@@ -68,6 +81,18 @@ def load_runs(runs_dir):
             lrs.append(row.get("lr"))
             served_bpb.append(row.get("served_bpb"))
             random_train_bpb.append(row.get("random_train_bpb"))
+            tok_per_sec.append(row.get("tok_per_sec", pending_tps))
+            peak_mem_mb.append(row.get("peak_mem_mb", pending_mem))
+            pending_tps, pending_mem = None, None
+            # Tokens seen: step * batch * accum * ctx from the header.
+            # Step lies across vocabs. Tokens never lie.
+            a = header.get("args", {})
+            c = header.get("cfg", {})
+            try:
+                ts = int(row["step"]) * int(a.get("batch", 0)) * int(a.get("accum", 1)) * int(c.get("context_length", 0))
+                tokens_seen.append(ts if ts > 0 else None)
+            except (TypeError, ValueError):
+                tokens_seen.append(None)
         # Samples: stepN.txt files, oldest first. Text inlined, escaped later.
         samples = []
         sdir = d / "samples"
@@ -91,6 +116,9 @@ def load_runs(runs_dir):
                          "val": val, "val_bpb": val_bpb, "lr": lrs,
                          "served_bpb": served_bpb,
                          "random_train_bpb": random_train_bpb,
+                         "tok_per_sec": tok_per_sec,
+                         "peak_mem_mb": peak_mem_mb,
+                         "tokens_seen": tokens_seen,
                          "early_stop": early_stop, "samples": samples})
     return runs
 
@@ -153,6 +181,7 @@ button,select{background:#1c2330;color:#e6edf3;border:1px solid #30363d;border-r
 <canvas id="cv" width="1200" height="340"></canvas>
 <div class="row">
 <button id="mode">series: val_bpb</button>
+<button id="xaxis">x: step</button>
 <button id="scale">scale: linear</button>
 <button id="lr">lr: on</button>
 <button id="threeway">3-way: off</button>
@@ -166,7 +195,7 @@ const RUNS = __DATA__;
 const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
 const PAL = ["#f97316","#38bdf8","#a3e635","#e879f9","#facc15","#fb7185","#2dd4bf","#c084fc"];
 let mode = 'val_bpb', log = false;  // bpb first: fair metric across vocabs
-let showLr = true, showThree = false;
+let showLr = true, showThree = false, xTokens = false;
 // One checkbox per run; all on by default.
 const box = document.getElementById('runs');
 RUNS.forEach((r, i) => {
@@ -188,22 +217,28 @@ document.getElementById('lr').onclick = e => {
 document.getElementById('threeway').onclick = e => {
   showThree = !showThree; e.target.textContent = '3-way: ' + (showThree ? 'on' : 'off'); draw();
 };
+document.getElementById('xaxis').onclick = e => {
+  xTokens = !xTokens; e.target.textContent = 'x: ' + (xTokens ? 'tokens' : 'step'); draw();
+};
 function active() {
   return [...box.querySelectorAll('input:checked')].map(c => RUNS[+c.dataset.i]);
 }
 function draw() {
   // Min/max over visible series, then plot. Nulls break the pen so
   // eval-death gaps (160M @3901) render as red dashes, not silence.
+  // X axis: step or tokens-seen. Step lies across vocabs. Tokens never lie.
   const rs = active(), W = cv.width, H = cv.height, P = 44;
   ctx.clearRect(0, 0, W, H);
+  const Xv = (r, i) => (xTokens && r.tokens_seen && r.tokens_seen[i] != null)
+    ? r.tokens_seen[i] : r.steps[i];
   let lo = Infinity, hi = -Infinity, xmax = 0;
   rs.forEach(r => r.steps.forEach((s, i) => {
     const v = r[mode][i]; if (v == null) return;
-    lo = Math.min(lo, v); hi = Math.max(hi, v); xmax = Math.max(xmax, s);
+    lo = Math.min(lo, v); hi = Math.max(hi, v); xmax = Math.max(xmax, Xv(r, i));
   }));
   if (!isFinite(lo)) { ctx.fillStyle = '#8b949e'; ctx.fillText('no data for ' + mode, P + 10, 30); return; }
   if (log) { lo = Math.log(Math.max(lo, 1e-6)); hi = Math.log(Math.max(hi, 1e-6)); }
-  const X = s => P + (s / Math.max(xmax, 1)) * (W - P - 12);
+  const X = v => P + (v / Math.max(xmax, 1)) * (W - P - 12);
   const Y = v => { v = log ? Math.log(Math.max(v, 1e-6)) : v;
     return H - 26 - (v - lo) / Math.max(hi - lo, 1e-9) * (H - 26 - 14); };
   // Axes: bare min/max labels, nothing fancy.
@@ -270,32 +305,32 @@ function draw() {
     r.steps.forEach((s, i) => {
       const v = r[mode][i];
       if (v == null) { pen = false; return; }
-      const x = X(s), y = Y(v);
+      const x = X(Xv(r, i)), y = Y(v);
       pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true;
     });
     ctx.stroke();
     // Red dashed bridge across each null span: eval died here.
     ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
-    let gs = null;
+    let gs = null, gi = -1;
     r.steps.forEach((s, i) => {
-      if (r[mode][i] == null && gs == null) gs = s;
+      if (r[mode][i] == null && gs == null) { gs = s; gi = i; }
       if (r[mode][i] != null && gs != null) {
-        ctx.beginPath(); ctx.moveTo(X(gs), H - 26); ctx.lineTo(X(s), H - 26); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(X(Xv(r, gi)), H - 26); ctx.lineTo(X(Xv(r, i)), H - 26); ctx.stroke();
         ctx.fillStyle = '#e74c3c'; ctx.font = '10px system-ui';
-        ctx.fillText('eval gap ' + gs + '-' + s, X(gs) + 2, H - 32);
+        ctx.fillText('eval gap ' + gs + '-' + s, X(Xv(r, gi)) + 2, H - 32);
         gs = null;
       }
     });
     // Trailing gap: line died and never came back (160M signature).
     if (gs != null) {
-      ctx.beginPath(); ctx.moveTo(X(gs), H - 26); ctx.lineTo(X(xmax), H - 26); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(X(Xv(r, gi)), H - 26); ctx.lineTo(X(xmax), H - 26); ctx.stroke();
       ctx.fillStyle = '#e74c3c'; ctx.font = '10px system-ui';
-      ctx.fillText('eval dead from ' + gs, X(gs) + 2, H - 32);
+      ctx.fillText('eval dead from ' + gs, X(Xv(r, gi)) + 2, H - 32);
     }
     ctx.setLineDash([]);
     // Early-stop flag: deliberate end, green tick, not a gap.
     if (r.early_stop && r.early_stop.step != null) {
-      const ex = X(r.early_stop.step);
+      const ex = X(xTokens && r.tokens_seen ? (r.tokens_seen[r.steps.indexOf(r.early_stop.step)] || r.early_stop.step) : r.early_stop.step);
       ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(ex, 8); ctx.lineTo(ex, H - 26); ctx.stroke();
       ctx.fillStyle = '#2ecc71'; ctx.font = '10px system-ui';
@@ -313,18 +348,71 @@ function draw() {
         ctx.beginPath(); let pen = false;
         r.steps.forEach((s, i) => {
           const v = r[k][i]; if (v == null) { pen = false; return; }
-          const x = X(s), y = Y(v);
+          const x = X(Xv(r, i)), y = Y(v);
           pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true;
         });
         ctx.stroke(); ctx.setLineDash([]);
       });
     }
   });
-  // Legend line under the canvas.
+  // Status cards + alerts: throughput, ETA, mem, guard proximity, eval death.
+  // Issues surface here. Watch list for the operator.
+  let cards = [];
+  rs.forEach(r => {
+    const col = PAL[RUNS.indexOf(r) % PAL.length];
+    const n = r.steps.length;
+    const lastStep = r.steps[n - 1];
+    const lastTps = r.tok_per_sec ? r.tok_per_sec.filter(v => v != null).pop() : null;
+    const lastMem = r.peak_mem_mb ? r.peak_mem_mb.filter(v => v != null).pop() : null;
+    const lastTs = r.tokens_seen && r.tokens_seen[n - 1] != null ? r.tokens_seen[n - 1] : null;
+    let bits = [`<span class="sw" style="background:${col}"></span><b>${r.name}</b> step ${lastStep}`];
+    if (lastTs != null) bits.push((lastTs / 1e6).toFixed(1) + 'M tok');
+    if (lastTps != null) {
+      bits.push((lastTps / 1000).toFixed(0) + 'k tok/s');
+      const rate = lastTps;
+      // NOTE: ctx lives in header cfg, not args. Tokens/step from last tokens_seen delta.
+      let perStep = null;
+      if (n > 1 && r.tokens_seen && r.tokens_seen[n - 1] != null && r.tokens_seen[n - 2] != null) {
+        const dTok = r.tokens_seen[n - 1] - r.tokens_seen[n - 2];
+        const dStep = r.steps[n - 1] - r.steps[n - 2];
+        if (dStep > 0 && dTok > 0) perStep = dTok / dStep;
+      }
+      const totalSteps = r.args && r.args.steps;
+      if (perStep && totalSteps && totalSteps > lastStep && rate > 0) {
+        const hrs = (totalSteps - lastStep) * perStep / rate / 3600;
+        bits.push('ETA ' + hrs.toFixed(1) + 'h');
+      }
+    }
+    if (lastMem) bits.push('peak ' + (lastMem / 1024).toFixed(1) + 'GB');
+    // Alerts. Guard proximity + eval death + recycling.
+    let alerts = [];
+    if (mode === 'val_bpb' && r.val_bpb && r.args && r.args.degrade_frac != null) {
+      let best = Infinity;
+      r.val_bpb.forEach(v => { if (v != null && v < best) best = v; });
+      const last = [...r.val_bpb].reverse().find(v => v != null);
+      if (isFinite(best) && last != null) {
+        const over = (last - best) / best;
+        const df = r.args.degrade_frac;
+        if (over > df) alerts.push('GUARD TRIPPED +' + (over * 100).toFixed(1) + '%');
+        else if (over > df * 0.5) alerts.push('guard near +' + (over * 100).toFixed(1) + '%');
+      }
+    }
+    const tailNulls = mode === 'val_bpb' || mode === 'val'
+      ? (r[mode].slice(-3).every(v => v == null) && r[mode].some(v => v != null))
+      : false;
+    if (tailNulls) alerts.push('EVAL DEAD');
+    if (r.served_bpb && r.random_train_bpb) {
+      const s = [...r.served_bpb].reverse().find(v => v != null);
+      const t = [...r.random_train_bpb].reverse().find(v => v != null);
+      if (s != null && t != null && (t - s) > 0.3 / 1.44) alerts.push('RECYCLING?');
+    }
+    cards.push('<div>' + bits.join(' | ') + (alerts.length ? ' <b style="color:#e74c3c">' + alerts.join(' ') + '</b>' : '') + '</div>');
+  });
   const lg = document.getElementById('legend');
-  lg.textContent = showThree
+  let lgText = showThree
     ? 'yellow dashed = served bpb (loader replay) / teal dashed = random-train bpb / tight = healthy, served diving = recycling'
     : '';
+  lg.innerHTML = (lgText ? '<div>' + lgText + '</div>' : '') + cards.join('');
 }
 // Sample viewer: run dropdown -> step dropdown -> raw text.
 const which = document.getElementById('which'), step = document.getElementById('step'),

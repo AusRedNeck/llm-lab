@@ -88,3 +88,29 @@ def test_noise_band_ignores_nulls():
     vals = [1.70, None, 1.72, None, 1.71]
     band = noise_band(vals)
     assert band["n"] == 2
+
+
+def test_load_runs_harvests_throughput(tmp_path):
+    _write_run(tmp_path, "run_tps", [
+        {"step": 100, "train": 5.0, "avg50": 5.1, "val": None, "lr": 3e-4,
+         "tok_per_sec": 42000.0, "peak_mem_mb": 12500.0},
+        {"step": 200, "train": 4.8, "avg50": 4.9, "val": 4.76, "val_bpb": 1.69, "lr": 2.8e-4},
+    ])
+    runs = load_runs(str(tmp_path))
+    assert len(runs) == 1
+    assert runs[0]["tok_per_sec"] == [42000.0, None]
+    assert runs[0]["peak_mem_mb"] == [12500.0, None]
+
+
+def test_load_runs_computes_tokens_seen(tmp_path):
+    d = tmp_path / "run_tok"
+    (d / "samples").mkdir(parents=True)
+    with open(d / "loss.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"args": {"preset": "pythia160", "batch": 8, "accum": 2},
+                            "cfg": {"context_length": 512}, "params_m": 162.6}) + "\n")
+        f.write(json.dumps({"step": 100, "train": 5.0, "avg50": 5.1, "lr": 3e-4}) + "\n")
+        f.write(json.dumps({"step": 200, "train": 4.8, "avg50": 4.9, "lr": 2.8e-4}) + "\n")
+    runs = load_runs(str(tmp_path))
+    assert len(runs) == 1
+    # tokens_seen = step * batch * accum * ctx
+    assert runs[0]["tokens_seen"] == [100 * 8 * 2 * 512, 200 * 8 * 2 * 512]

@@ -781,8 +781,15 @@ def main():
                     print(f"  Peak GPU mem: {mem_mb:,.0f}MB / 16376MB")
                     print(f"  ===\n")
                 else:
+                    mem_mb = 0
+                    # MPS: unified memory, no separate gauge. Report rate only.
                     print(f"\n  === THROUGHPUT === {tok_per_sec:,.0f} tok/s ===\n")
                 throughput_reported = True
+                # Persist for the viz: ETA + OOM headroom cards read this row.
+                log_f.write(json.dumps({"throughput": True, "step": step,
+                                        "tok_per_sec": round(tok_per_sec, 1),
+                                        "peak_mem_mb": round(mem_mb, 1)}) + "\n")
+                log_f.flush()
         if step % 25 == 0 or step == 1:
             vstr = f" val={val:.4f} bpb={val_bpb:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
