@@ -58,11 +58,17 @@ def load_model(ckpt_path, rotary_pct, device):
     return model.to(device), cfg, st
 
 
-def probe_windows(device):
-    n = os.path.getsize(BIN) // 4
-    with np.errstate(all="ignore"):
-        corpus = torch.from_numpy(np.memmap(BIN, dtype="<i4", mode="r", shape=(n,)))
-    cut = int(n * (1.0 - VAL_FRAC))
+def probe_windows(device, bin_path=BIN, val_frac=VAL_FRAC):
+    if bin_path.endswith(".pt"):
+        import torch as _t
+
+        corpus = _t.load(bin_path, map_location="cpu").long()
+        n = len(corpus)
+    else:
+        n = os.path.getsize(bin_path) // 4
+        with np.errstate(all="ignore"):
+            corpus = torch.from_numpy(np.memmap(bin_path, dtype="<i4", mode="r", shape=(n,)))
+    cut = int(n * (1.0 - val_frac))
     val = corpus[cut:]
     g = torch.Generator().manual_seed(SEED)
     idx = torch.randint(0, len(val) - T - 1, (N_WINDOWS,), generator=g)
@@ -133,12 +139,14 @@ def main():
     ap.add_argument("--rotary-pct", type=float, default=1.0,
                     help="0.25 for fix-era (post e6a526a) checkpoints!")
     ap.add_argument("--out", default="probes")
+    ap.add_argument("--bin", default=BIN)
+    ap.add_argument("--val-frac", type=float, default=VAL_FRAC)
     ns = ap.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     files = []
     for pat in ns.ckpts:
         files.extend(sorted(glob.glob(pat)) or [pat])
-    xs, ys = probe_windows(device)
+    xs, ys = probe_windows(device, ns.bin, ns.val_frac)
     os.makedirs(ns.out, exist_ok=True)
     for path in files:
         name = os.path.basename(path).replace(".pt", "")

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>probe curves over training</title>
+<style>
+:root{color-scheme:dark}
+body{background:#0b0e14;color:#e6edf3;font:14px/1.5 system-ui,sans-serif;margin:0;padding:16px}
+h1{font-size:17px;margin:0 0 2px}.sub{color:#8b949e;font-size:12px;margin-bottom:10px}
+canvas{background:#11161f;border:1px solid #30363d;border-radius:8px;width:100%;display:block;margin:6px 0}
+.legend{font-size:11.5px;color:#8b949e;margin:2px 0 6px}
+</style></head><body>
+<h1>attention over training &mdash; probe curves</h1>
+<div class="sub">3 probes &middot; exp002_bpe2k_rope_bpe2k_202609042339_step500 exp002_bpe2k_rope_bpe2k_202609042339_step2500 exp002_bpe2k_rope_bpe2k_202609042339_step5000</div>
+<div class="legend"><b>entropy</b>: mid-layer attention entropy (fall = focus, crash = collapse) &middot;
+<b>locality</b>: mass within distance 1 (spike = copy/induction regime) &middot;
+<b>rank</b>: end-layer effective rank (fall = representational collapse) &middot;
+<b>top1/bpb</b>: confidence vs probe loss.</div>
+<canvas id="c1" width="1100" height="200"></canvas>
+<canvas id="c2" width="1100" height="200"></canvas>
+<canvas id="c3" width="1100" height="200"></canvas>
+<canvas id="c4" width="1100" height="200"></canvas>
+<script>
+const P=[{"step": 500, "ckpt": "exp002_bpe2k_rope_bpe2k_202609042339_step500", "ent": 3.571898937225342, "loc": 0.1412566490471363, "rank": 129.35589790344238, "top1": 0.2639022320508957, "bpb": 1.284754413508137}, {"step": 2500, "ckpt": "exp002_bpe2k_rope_bpe2k_202609042339_step2500", "ent": 2.579969584941864, "loc": 0.286425344645977, "rank": 126.76571464538574, "top1": 0.42350583523511887, "bpb": 1.1807174323084888}, {"step": 5000, "ckpt": "exp002_bpe2k_rope_bpe2k_202609042339_step5000", "ent": 2.64137065410614, "loc": 0.2752379849553108, "rank": 129.0184841156006, "top1": 0.4623405635356903, "bpb": 1.1933920672278595}];
+function panel(id,series,label){const cv=document.getElementById(id),
+ctx=cv.getContext('2d'),W=cv.width,H=cv.height,Pd=52;
+ctx.clearRect(0,0,W,H);let lo=Infinity,hi=-Infinity,xmax=1;
+series.forEach(s=>s.pts.forEach(([x,v])=>{if(v==null||!isFinite(v))return;
+lo=Math.min(lo,v);hi=Math.max(hi,v);xmax=Math.max(xmax,x);}));
+ctx.strokeStyle='#30363d';ctx.beginPath();ctx.moveTo(Pd,8);
+ctx.lineTo(Pd,H-22);ctx.lineTo(W-8,H-22);ctx.stroke();
+ctx.fillStyle='#8b949e';ctx.font='11px system-ui';ctx.fillText(label,Pd+6,14);
+if(!isFinite(lo)){ctx.fillText('need 2+ probes, have '+P.length,Pd+12,H/2);return;}
+const sp=(hi-lo)||Math.abs(hi)||1;lo-=sp*0.06;hi+=sp*0.06;
+const X=x=>Pd+(x/xmax)*(W-Pd-12),Y=v=>H-22-(v-lo)/(hi-lo)*(H-34);
+ctx.fillText(hi.toFixed(2),4,16);ctx.fillText(lo.toFixed(2),4,H-24);
+ctx.fillText('step '+xmax,W-110,H-8);
+series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=2;ctx.beginPath();
+let st=false;s.pts.forEach(([x,v])=>{if(v==null||!isFinite(v))return;
+st?ctx.lineTo(X(x),Y(v)):ctx.moveTo(X(x),Y(v));st=true;});ctx.stroke();
+ctx.fillStyle=s.color;s.pts.forEach(([x,v])=>{if(v==null||!isFinite(v))return;
+ctx.beginPath();ctx.arc(X(x),Y(v),3,0,7);ctx.fill();});});}
+const S=k=>P.map(p=>[p.step,p[k]]);
+panel('c1',[{color:'#38bdf8',pts:S('ent')}],'mid-layer attention entropy');
+panel('c2',[{color:'#a3e635',pts:S('loc')}],'mid-layer locality (copy signal)');
+panel('c3',[{color:'#e879f9',pts:S('rank')}],'end-layer eff_rank');
+panel('c4',[{color:'#f97316',pts:S('bpb')},{color:'#e6edf3',pts:S('top1')}],'probe bpb (orange) / top1 (white)');
+</script></body></html>

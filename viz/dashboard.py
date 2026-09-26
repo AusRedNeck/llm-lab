@@ -222,7 +222,7 @@ th{background:#161b22;color:#8b949e;position:sticky;top:0}
 .legend{font-size:11.5px;color:#8b949e;margin:2px 0 6px}
 </style></head><body>
 <h1>llm-lab decision board</h1>
-<div class="sub">built __STAMP__ &middot; rebuild: <code>python viz/dashboard.py [--watch N]</code></div>
+<div class="sub">built __STAMP__ &middot; rebuild: <code>python viz/dashboard.py [--watch N]</code><br>x-ray: <a href="xray.html" style="color:#38bdf8">glass-box x-ray</a> (<code>python -m viz.xray --ckpt checkpoints/&lt;run&gt;_stepN.pt --prompt "Once upon a time"</code>)<br>replay: <a href="replay.html" style="color:#38bdf8">checkpoint replay</a> (<code>python -m viz.replay --ckpts checkpoints/&lt;fam&gt;_step500.pt checkpoints/&lt;fam&gt;_step2500.pt checkpoints/&lt;fam&gt;_step5000.pt</code>)<br>probe curves: <a href="probe_curve.html" style="color:#38bdf8">attention over training</a> (<code>python viz/probe.py checkpoints/&lt;fam&gt;_step*.pt --bin data/TinyStories_bpe2k.pt &amp;&amp; python -m viz.probe_plot --probes "probes/&lt;fam&gt;*.json"</code>)</div>
 <div class="row">
   <span id="famlist"></span>
   <button id="xmode">axis: tokens</button>
@@ -243,6 +243,7 @@ th{background:#161b22;color:#8b949e;position:sticky;top:0}
 <label>step: <select id="step"></select></label>
 </div>
 <div id="sample">pick a run to hear it learning.</div>
+<div class="sub" id="xraycmd" style="margin-top:6px"></div>
 <script>
 const DATA = __DATA__;
 const RUNS = DATA.runs, ARMS = DATA.arms;
@@ -362,7 +363,9 @@ function fillSteps(){ stepSel.innerHTML=''; const r=RUNS[+which.value]; if(!r)re
   r.samples.forEach(s=>{const o=document.createElement('option');o.value=s.step;o.textContent='step '+s.step;stepSel.appendChild(o);});
   if(r.samples.length){stepSel.value=r.samples[r.samples.length-1].step;show();} else sample.textContent='no samples'; }
 function show(){ const r=RUNS[+which.value]; if(!r)return;
-  const s=r.samples.find(s=>String(s.step)===stepSel.value); sample.textContent=s?s.text:'(missing)'; }
+  const s=r.samples.find(s=>String(s.step)===stepSel.value); sample.textContent=s?s.text:'(missing)';
+  document.getElementById('xraycmd').innerHTML =
+    `x-ray this one: <code>python -m viz.xray --ckpt checkpoints/${r.name}_step${stepSel.value}.pt --prompt "Once upon a time"</code> &middot; <a href="xray.html" style="color:#38bdf8">open last x-ray</a> &middot; <a href="replay.html" style="color:#38bdf8">replay</a> &middot; <a href="probe_curve.html" style="color:#38bdf8">probe curves</a>`; }
 which.onchange=fillSteps; stepSel.onchange=show;
 if([...which.options].length) fillSteps();
 drawArms(); drawAll();
