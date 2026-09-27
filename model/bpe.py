@@ -30,10 +30,14 @@ def _unlatin(s: str) -> bytes:
 class BPETokenizer:
     # Trained vocab: id -> byte piece, plus merge ranks that define encoding.
     def __init__(self, vocab: dict[int, bytes], merges: dict[tuple[bytes, bytes], int],
-                 eos: bool = False):
+                 eos: bool = False, added: dict[bytes, int] | None = None):
         # eos=False keeps old vocabs byte-identical (no silent id drift).
+        # added = pre-merge literals (e.g. NeoX multi-space runs): longest
+        # match wins, emitted directly before BPE splitting. Empty = off,
+        # so old vocabs behave exactly as before.
         self.vocab = dict(vocab)
         self.merges = merges
+        self.added: dict[bytes, int] = dict(added) if added else {}
         self.eos_id = None
         if eos:
             piece = EOS.encode("utf-8")
@@ -54,10 +58,46 @@ class BPETokenizer:
         return self._encode_seg(text)
 
     def _encode_seg(self, text: str) -> list[int]:
+        # Added literals (NeoX multi-space runs) split first: longest
+        # match wins, emitted directly. Everything else takes the
+        # normal regex-split + BPE-merge path.
+        if self.added:
+            return self._encode_with_added(text)
         # Per chunk: utf-8 bytes first, then fuse the cheapest-ranked pair.
         ids: list[int] = []
         for chunk in _SPLIT.findall(text):
             ids.extend(self._encode_chunk(chunk))
+        return ids
+
+    def _encode_with_added(self, text: str) -> list[int]:
+        # One pass: at each offset, longest added literal wins; else
+        # consume one char and let the normal chunk path handle it.
+        # Buffer non-added chars so regex splitting still sees whole runs.
+        keys = sorted(self.added, key=len, reverse=True)
+        ids: list[int] = []
+        buf = ""
+        raw = text
+        i = 0
+        while i < len(raw):
+            hit = None
+            for k in keys:
+                kb = k.decode("utf-8", errors="ignore")
+                if raw.startswith(kb, i):
+                    hit = k
+                    break
+            if hit is not None:
+                if buf:
+                    for chunk in _SPLIT.findall(buf):
+                        ids.extend(self._encode_chunk(chunk))
+                    buf = ""
+                ids.append(self.added[hit])
+                i += len(hit.decode("utf-8", errors="ignore"))
+            else:
+                buf += raw[i]
+                i += 1
+        if buf:
+            for chunk in _SPLIT.findall(buf):
+                ids.extend(self._encode_chunk(chunk))
         return ids
 
     def _encode_chunk(self, chunk: str) -> list[int]:
@@ -87,17 +127,19 @@ class BPETokenizer:
                 "vocab": {str(i): _latin(s) for i, s in self.vocab.items()},
                 "merges": [[_latin(a), _latin(b)] for a, b in self.merges],
                 "eos": self.eos_id is not None,
+                "added": {_latin(s): i for s, i in self.added.items()},
             }, f)
 
     @classmethod
     def load(cls, path: str) -> "BPETokenizer":
         # Merge rank = order in the saved list. Rank IS the encoding rule.
-        # Old files have no "eos" key -> False -> vocab loads untouched.
+        # Old files have no "eos"/"added" keys -> defaults -> vocab loads untouched.
         with open(path) as f:
             raw = json.load(f)
         vocab = {int(i): _unlatin(s) for i, s in raw["vocab"].items()}
         merges = {(_unlatin(a), _unlatin(b)): r for r, (a, b) in enumerate(raw["merges"])}
-        return cls(vocab, merges, eos=raw.get("eos", False))
+        added = {_unlatin(s): i for s, i in raw.get("added", {}).items()}
+        return cls(vocab, merges, eos=raw.get("eos", False), added=added)
 
 
 def train_bpe(texts: list[str], num_merges: int) -> BPETokenizer:
