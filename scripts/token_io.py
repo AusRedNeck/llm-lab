@@ -195,7 +195,12 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
     t0 = time.time()
     n_chunks = 0
 
-    with open(src, encoding="utf-8", errors="replace") as f, open(dst_bin, out_mode) as out:
+    with open(src, encoding="utf-8", errors="replace", newline="") as f, \
+            open(dst_bin, out_mode) as out:
+        # newline="" so CRLF survives. The default newline=None rewrites every
+        # CR-LF pair to a bare LF before the tokenizer sees it: our corpora are
+        # CRLF, so that silently dropped 0.77% of the characters and made the
+        # cache irreproducible from the source (tests/test_corpus_newlines.py).
         if chars:
             f.read(chars)               # text mode: same unit we recorded
         while True:
