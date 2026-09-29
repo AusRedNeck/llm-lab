@@ -52,6 +52,57 @@ PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "l112m": L112M_14L768}
 
 
+def load_tokenizer(path: str):
+    """Load either tokenizer flavour, always with .encode(text) -> list[int].
+
+    HF `tokenizer.json` (keys "model" + "pre_tokenizer") -> HfBpeShim over the
+    real HF encoder. Legacy BPETokenizer json ({vocab, merges}) -> BPETokenizer.
+
+    This has to be the same encoder that built the vocab: a re-derived legacy
+    copy of the Pythia vocab measures ~1.1% fewer tokens than the real thing
+    and first diverges around curly quotes/accented characters.
+    """
+    import json
+    with open(path, encoding="utf-8") as f:
+        head = json.load(f)
+    if "model" in head and "pre_tokenizer" in head:
+        scripts = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from hf_bpe_shim import HfBpeShim
+        return HfBpeShim.from_file(path)
+    return BPETokenizer.load(path)
+
+
+def tokenizer_vocab_size(tok, path: str) -> int:
+    """Embedding rows, which is NOT the tokenizer's entry count.
+
+    Pythia is the trap: model.vocab holds 50,254 entries, the encoder also emits
+    23 added whitespace-run tokens (ids 50,254..50,276), so get_vocab() is
+    50,277 and a real token stream contains id 50,276. pythia-70m's config.json
+    then pads the embedding to 50,304 for efficiency. Sizing our model to
+    50,254 or 50,277 makes a token the encoder actually produces an
+    out-of-range cross-entropy target.
+
+    Legacy vocabs have no padding concept, so use the entry count there.
+    """
+    import json
+    with open(path, encoding="utf-8") as f:
+        head = json.load(f)
+    if "model" in head and "pre_tokenizer" in head:
+        cfg_path = os.path.join(os.path.dirname(path), "config.json")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                v = json.load(f).get("vocab_size")
+            if isinstance(v, int) and v >= len(tok._hf.get_vocab()):
+                print(f"  vocab: {len(tok._hf.get_vocab())} encoder ids, "
+                      f"embedding padded to {v} (config.json)")
+                return v
+        return len(tok._hf.get_vocab())
+    return len(tok.vocab)
+
+
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
@@ -304,10 +355,12 @@ def main():
     ap.add_argument("--val_frac", type=float, default=0.01,
                     help="held-out tail fraction for closed-book val (default 0.01)")
     ap.add_argument("--use_rope", action="store_true",
-                    help="Exp 003: rotary positions instead of learned absolute")
-    ap.add_argument("--rotary-pct", type=float, default=1.0,
+                    help="Exp 003: rotary positions instead of learned absolute. "
+                         "Pythia presets already set this in config.")
+    ap.add_argument("--rotary-pct", type=float, default=None,
                     help="Fraction of head dims for RoPE (Pythia=0.25). "
-                         "Full RoPE = 1.0 for backward compat.")
+                         "Default: the preset's rotary_pct (1.0 for legacy "
+                         "presets, 0.25 for the pythia presets).")
     ap.add_argument("--out", default="checkpoints")
     ap.add_argument("--val_every", type=int, default=100,
                     help="eval held-out loss every N steps (0 = off)")
@@ -370,15 +423,21 @@ def _train(args):
     if args.dropout is not None:
         # CLI wins: one variable per run, preset stays the control.
         cfg.dropout = args.dropout
+    if args.rotary_pct is not None:
+        # CLI wins; unset means "the preset's own value" (Pythia = 0.25).
+        cfg.rotary_pct = args.rotary_pct
+    use_rope = args.use_rope or cfg.use_rope
     device = get_device()
     tok = None
     if args.tokenizer:
         # File is truth: vocab size follows the tokenizer, not the preset.
-        tok = BPETokenizer.load(args.tokenizer)
-        cfg.vocab_size = len(tok.vocab)
-        print(f"tokenizer={args.tokenizer} vocab={len(tok.vocab)}")
+        tok = load_tokenizer(args.tokenizer)
+        cfg.vocab_size = tokenizer_vocab_size(tok, args.tokenizer)
+        print(f"tokenizer={args.tokenizer} vocab={cfg.vocab_size}")
     print(f"preset={args.preset} params~{cfg.num_params() / 1e6:.1f}M "
-          f"ctx={cfg.context_length} device={device}")
+          f"ctx={cfg.context_length} device={device} "
+          f"rope={use_rope} rotary_pct={cfg.rotary_pct} "
+          f"parallel_residual={cfg.parallel_residual}")
 
     torch.manual_seed(0)
     model = Transformer(
@@ -387,9 +446,10 @@ def _train(args):
         embedding_dim=cfg.embedding_dim,
         num_heads=cfg.num_heads,
         num_layers=cfg.num_layers,
-        use_rope=args.use_rope,
-        rotary_pct=args.rotary_pct,
+        use_rope=use_rope,
+        rotary_pct=cfg.rotary_pct,
         dropout=cfg.dropout,
+        parallel_residual=cfg.parallel_residual,
     ).to(device)
     model.train()
 
@@ -920,7 +980,7 @@ def _train(args):
             ckpt = os.path.join(
                 args.out, f"exp002_{tag}_{run_stamp}_step{step}.pt")
             saved_cfg = dict(vars(cfg))
-            saved_cfg["use_rope"] = args.use_rope
+            saved_cfg["use_rope"] = use_rope
             # Generate needs this to speak the same vocab. Bytes runs: None.
             saved_cfg["tokenizer"] = args.tokenizer
             saved_cfg["corpus"] = args.corpus or args.data
