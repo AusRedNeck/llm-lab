@@ -19,9 +19,16 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-def load_val_text(path: str = "data/incoming/openwebtext_sample_1gb.txt",
+def load_val_text(path: str = "data/pile_train_full.txt",
                   val_frac: float = 0.01) -> str:
-    """Load the last val_frac of the text file as held-out val data."""
+    """Load the last val_frac of the text file as held-out val data.
+
+    The default must be the SAME corpus the 70M run trains on. Comparing our
+    model (trained on the Pile) against open weights on OpenWebText measures
+    two variables at once and answers neither. Binary read + errors="replace":
+    text mode would strip the CR from this CRLF corpus and hand the model a
+    slightly different Pile than the one we trained on.
+    """
     size = os.path.getsize(path)
     val_bytes = int(size * val_frac)
     with open(path, "rb") as f:
@@ -105,7 +112,7 @@ def main():
     ap.add_argument("--model", nargs="+",
                      default=["HuggingFaceTB/SmolLM2-135M",
                               "HuggingFaceTB/SmolLM2-360M"])
-    ap.add_argument("--val_text", default="data/incoming/openwebtext_sample_1gb.txt")
+    ap.add_argument("--val_text", default="data/pile_train_full.txt")
     ap.add_argument("--max_samples", type=int, default=500)
     ap.add_argument("--ctx", type=int, default=512)
     ap.add_argument("--device", default="auto")
