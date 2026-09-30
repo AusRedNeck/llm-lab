@@ -324,6 +324,12 @@ def find_run_dir(spec):
         if os.path.exists(os.path.join(exact, "loss.jsonl")):
             return exact
     fam = run_family(spec)
+    # An EMPTY family is not a wildcard. A spec armed but not yet launched carries
+    # run_name "", so fam is "" and glob("*") matched EVERY run dir in the lab --
+    # the finish test then adopted a dead run's step count and declared a brand
+    # new job "complete at step 8000/5000" before it had launched (observed live
+    # 2026-09-30 08:57, arm pile-eff128k-5k). No run dir means no evidence, so
+    # the answer is None and the caller treats the job as not-yet-started.
     if not fam:
         return None
     cands = [d for d in glob.glob(os.path.join(LAB, "runs", "*" + fam)) if os.path.isdir(d)]
@@ -358,6 +364,13 @@ def finished_log(spec, st, spec_path=None):
             pass
     if floor is None and spec_path and os.path.exists(spec_path):
         floor = os.path.getmtime(spec_path)
+    # No floor derivable at all means we cannot prove any log belongs to THIS
+    # job. Returning a stale log here is how an unlaunched arm gets declared
+    # finished: with state={} and spec_path=None the guard above disabled itself
+    # and matched exp011b_train.log from 2026-09-13 (observed 2026-09-30 while
+    # arming pile-eff128k-5k). Absence of evidence is not evidence of done.
+    if floor is None:
+        return None
     for p in glob.glob(os.path.join(LAB, "logs", "*.log")):
         try:
             if floor is not None and os.path.getmtime(p) < floor:
@@ -434,15 +447,30 @@ def ckpt_patterns(spec):
 
 
 def newest_ckpt_step(spec):
-    """Newest step checkpoint belonging to this job, or None. Deliberately returns None rather
-    than guessing: a step from the WRONG run would either fake completion or suppress a needed
-    relaunch, and the loss curve is the authoritative progress signal anyway."""
+    named = spec.get("run_name")
+    if not named:
+        return None
+    # Two jobs differ ONLY by their run stamp, so scope every ckpt lookup to this
+    # job's own stamp. spec["stamp"] is often "" (set at launch time, not at arm time),
+    # which made ckpt_patterns() fall back to a bare wildcard - so a job targeting
+    # 5000 steps read _step8000.pt from a DEAD run and was declared "complete at step
+    # 8000/5000" the instant it was armed, before launching (observed live 2026-09-30
+    # 08:57, arm pile-eff128k-5k). Derive the stamp from run_name and filter on it;
+    # if there is no stamp to match, there is no evidence, so return None.
+    #   run dirs  : YYYYMMDD_HHMM   (underscore)
+    #   ckpt files: YYYYMMDDHHMM    (no underscore)
+    m = re.search(r"(\d{8})[_-]?(\d{4})", named)
+    if not m:
+        return None
+    want = m.group(1) + m.group(2)
     best = None
     for pat in ckpt_patterns(spec):
         for p in glob.glob(os.path.join(LAB, spec["ckpt_dir"], pat)):
-            m = re.search(r"_step(\d+)\.pt$", p)
-            if m:
-                st = int(m.group(1))
+            if want not in os.path.basename(p):
+                continue
+            m2 = re.search(r"_step(\d+)\.pt$", p)
+            if m2:
+                st = int(m2.group(1))
                 best = st if best is None else max(best, st)
     return best
 
