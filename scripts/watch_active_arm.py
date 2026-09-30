@@ -21,14 +21,49 @@ WHY THIS SHAPE
     Deliver to the CHAT (session-attach), not `local`: a local job's output is
     saved and nobody reads it.
 
-Usage:  python watch_active_arm.py [--force]   (--force ignores the latch)
+Usage:  python watch_active_arm.py [--force] [--lab <llm-lab path>]   (--force ignores the latch)
+
+Cron requires cron scripts to live in the Hermes scripts dir, which is NOT the
+lab, so the lab root cannot be assumed to be the script's parent. Resolve it in
+this order: --lab flag, LLM_LAB env var, then the script's parent (the normal
+in-repo invocation). Without this the copied cron copy silently watches a
+directory that has no train_job.json and reports nothing forever.
 """
 import json
 import os
 import sys
 import time
 
-LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _resolve_lab():
+    """Find the llm-lab root, wherever this script was invoked from.
+
+    Cron requires cron scripts to live in the Hermes scripts dir, which is NOT
+    the lab, so the script's parent is not a usable signal for that deployment.
+    Order: --lab flag, LLM_LAB env var, the script's parent (in-repo), the
+    process CWD (cron's workdir), then the known install path. Without the
+    final fallback the cron copy resolves to the scripts dir, finds no
+    train_job.json, and reports nothing forever - silently, because empty
+    stdout is the healthy case.
+    """
+    if "--lab" in sys.argv:
+        return os.path.abspath(sys.argv[sys.argv.index("--lab") + 1])
+    env = os.environ.get("LLM_LAB")
+    if env:
+        return os.path.abspath(env)
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.exists(os.path.join(here, "train_job.json")):
+        return here
+    cwd = os.path.abspath(os.getcwd())
+    if os.path.exists(os.path.join(cwd, "train_job.json")):
+        return cwd
+    known = r"D:\Projects\llm-lab"
+    if os.path.exists(os.path.join(known, "train_job.json")):
+        return known
+    return here
+
+
+LAB = _resolve_lab()
 SPEC = os.path.join(LAB, "train_job.json")
 STATE = os.path.join(LAB, "train_job.state.json")
 LATCH = os.path.join(LAB, "watch_active_arm.state.json")
