@@ -19,3 +19,6 @@ logs/
 
 # local torch wheel (2.5GB, fetched for the cu126 build)
 torch-*.whl
+
+# watcher latch (runtime state, per-machine)
+watch_active_arm.state.json
