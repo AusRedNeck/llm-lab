@@ -358,17 +358,22 @@
     {
       "id": "pile-full-diet-70m",
       "family": "pile-full-diet",
-      "run_dirs": [],
+      "run_dirs": [
+        "20260929_2133_pythia_tokenizer_pile_train_full"
+      ],
       "control_id": "p50k-lr-15e-4",
       "lever": {
-        "corpus": "owt50k_v2->pile_full_2.0B",
-        "lr": "1.5e-3->5e-4",
-        "schedule": "20000->121091 steps (one epoch)",
-        "code": "parallel_residual/rotary_pct parity now explicit (9402ab5)"
+        "corpus": "owt_combined -> pile_full (2.0B tok, EleutherAI/the_pile_deduplicated)",
+        "lr": "1.5e-3 -> 5e-4",
+        "eff_batch": "64 -> 32 (16x2, VRAM-measured; 64 did not fit)",
+        "vocab": "owt50k_v2 (50256) -> real HF Pythia tokenizer (50304)",
+        "code": "9402ab5 parallel_residual + parity knobs explicit in cfg",
+        "use_rope": "control CLI omitted the flag (preset default) -> preset bakes 0.25 Pythia parity; control cfg shows full RoPE"
       },
       "goal": "Pythia-70M shape on the FULL 2.0B-token Pile diet, one epoch, to measure the open-weights gap vs EleutherAI/pythia-70m under the same corpus/encoder. Pythia saw 300B tokens; this sees 2.0B (0.67%) - the gap is the finding.",
       "verdict": "running",
-      "note": ""
+      "note": "launched 2026-09-29 21:33 PDT, .venv torch 2.14.0+cu126 py3.12. 70,278 tok/s measured, 8.6h window. 70.7M params / 18.9M non-emb = exact Pythia-70M fingerprint. 121,091 steps x eff32 x ctx512 = 1.98B = exactly one epoch over the 2,003,992,003-token cache; cosine to 10% so the low-LR endgame is reached. MULTI-LEVER BY NECESSITY: five args move at once, so this is NOT a single-variable result vs p50k-lr-15e-4 and that comparison is directional only. THE VALID COMPARISON is against open weights: same corpus, same encoder (real Pythia tokenizer), same ctx512. Control caveat: p50k-lr-15e-4 used a 50256 owt50k_v2 vocab + full RoPE, so its bpb is not on the same encoder and cannot be differenced against this arm.",
+      "accepted_confounded": true
     }
   ],
   "legacy_cutoff": "20260921",
