@@ -141,6 +141,14 @@ def main():
             continue
         ctl = by_id.get(a["control_id"]) if a.get("control_id") else None
         status = []
+        # An arm is registered before it has ever launched, so run_dirs starts
+        # empty (arm.py writes the row up front and the dir is recorded after
+        # the first launch). Indexing [-1] on that crashed the whole check with
+        # IndexError, taking the gate down for every OTHER arm too. Not-yet-run
+        # is a legitimate state, not a header failure.
+        if not a["run_dirs"]:
+            rows.append((a, ctl["id"] if ctl else "-", "not-launched-yet"))
+            continue
         # sample newest run dir of the arm against control's newest
         d_new = a["run_dirs"][-1]
         args, cfg, params = header_of(d_new)
@@ -149,6 +157,9 @@ def main():
             rows.append((a, "-", "header-unreadable"))
             continue
         if ctl:
+            if not ctl["run_dirs"]:
+                rows.append((a, ctl["id"], "control-not-launched-yet"))
+                continue
             cargs, ccfg, cparams = header_of(ctl["run_dirs"][-1])
             if cargs is not None:
                 probs = validate(a, cargs, args)
@@ -172,7 +183,12 @@ def main():
         for p in problems:
             print("  !", p)
     else:
-        bad = [r for r in rows if r[2] not in ("ok", "no-control")] + problems
+        # not-launched-yet is a pending state, not a violation: an arm is
+        # registered at arm() time and gets its run_dirs after the first
+        # launch, so a clean gate must not fail just because a new arm is
+        # waiting to start. Everything else ("ok", "no-control") is clean.
+        CLEAN = ("ok", "no-control", "not-launched-yet", "control-not-launched-yet")
+        bad = [r for r in rows if r[2] not in CLEAN] + problems
         for b in bad:
             print("PROBLEM:", b)
         print("CHECK: " + ("FAIL" if bad else "PASS"))
