@@ -1,0 +1,23 @@
+[
+  {
+    "rung": "C",
+    "micro": 16,
+    "accum": 16,
+    "lr": "5e-4",
+    "eff_batch": 256,
+    "log": "D:\\Projects\\llm-lab\\logs\\ladderC_b16x16_lr5e-4.log",
+    "rc": 0,
+    "wall_s": 352.1,
+    "peak_vram_mb": 12017,
+    "baseline_vram_mb": 713,
+    "curve_step_reached": 200,
+    "tok_s": 77464,
+    "final_avg50": 6.8251,
+    "oom": false,
+    "ctx": 512,
+    "params": "70.7M total / 18,915,328 non-emb",
+    "steps_done": 200,
+    "eff_tokens_per_batch": 131072,
+    "tok_per_param_at_1k_steps": 0.37
+  }
+]
