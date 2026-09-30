@@ -1,0 +1,16 @@
+{
+  "model": "EleutherAI/pythia-70m",
+  "weights": "D:\\Projects\\llm-lab\\data\\incoming\\pythia70m_weights",
+  "slice": "D:\\Projects\\llm-lab\\data\\incoming\\pile_val_slice.txt",
+  "seed": 1234,
+  "batches": 60,
+  "batch": 8,
+  "ctx": 512,
+  "tokens_scored": 245760,
+  "bytes_per_token_trainer": 3.9104,
+  "bytes_per_token_recomputed": 4.0576,
+  "nll_per_token_nats": 3.44952,
+  "bpb": 1.272659,
+  "device": "cuda",
+  "note": "bpb = nll_nats * log2(e) / 3.9104, matching train.py's bpb_factor exactly so this is directly comparable to the training runs' val bpb. Windows are non-overlapping and HF shifts labels internally (do NOT slice inputs yourself)."
+}
