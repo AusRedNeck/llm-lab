@@ -22,7 +22,23 @@ import sys
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXP = os.path.join(LAB, "experiments.json")
 SPEC = os.path.join(LAB, "train_job.json")
-PY = "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"
+
+
+def _default_python():
+    """The project venv, NOT the Hermes agent venv.
+
+    arm.py used to hardcode the Hermes venv, which ships torch 2.5.1+cu121 on
+    python 3.11 while every run in this lab trains on .venv's torch 2.14.0+cu126
+    on 3.12. A long run launched through the default silently used a different
+    torch build than the one its smokes were validated under, so its curve
+    would not be comparable to the arms it is measured against. Prefer the
+    project venv whenever it exists; fall back to the Hermes venv only if it
+    does not.
+    """
+    proj = os.path.join(LAB, ".venv", "Scripts", "python.exe")
+    if os.path.exists(proj):
+        return proj.replace("\\", "/")
+    return "C:/Users/shane/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"
 
 
 def arg_val(args, flag):
@@ -51,7 +67,7 @@ def main():
     ap.add_argument("--control", default=None)
     ap.add_argument("--lever", action="append", default=[],
                     help="key=claim (repeatable), e.g. lr=1.5e-3->5e-4")
-    ap.add_argument("--python", default=PY)
+    ap.add_argument("--python", default=None)
     ap.add_argument("--log", default=None)
     ap.add_argument("--max-restarts", type=int, default=6)
     ap.add_argument("--next-job", default=None)
@@ -96,7 +112,7 @@ def main():
         "stamp": "",
         "run_name": "",
         "target_steps": steps,
-        "python": ns.python,
+        "python": ns.python or _default_python(),
         "train_args": args,
         "match": match_from(args),
         "log": log,
