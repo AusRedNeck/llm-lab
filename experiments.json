@@ -354,6 +354,21 @@
       "goal": "First Pile-corpus probe: does the hand-rolled BPE read Pile at all.",
       "verdict": "closed",
       "note": "200 steps, 70.65M, 18MB tokenized sample. Proved the pipeline; superseded by the byte-faithful HF-tokenizer cache (f5713c3)."
+    },
+    {
+      "id": "pile-full-diet-70m",
+      "family": "pile-full-diet",
+      "run_dirs": [],
+      "control_id": "p50k-lr-15e-4",
+      "lever": {
+        "corpus": "owt50k_v2->pile_full_2.0B",
+        "lr": "1.5e-3->5e-4",
+        "schedule": "20000->121091 steps (one epoch)",
+        "code": "parallel_residual/rotary_pct parity now explicit (9402ab5)"
+      },
+      "goal": "Pythia-70M shape on the FULL 2.0B-token Pile diet, one epoch, to measure the open-weights gap vs EleutherAI/pythia-70m under the same corpus/encoder. Pythia saw 300B tokens; this sees 2.0B (0.67%) - the gap is the finding.",
+      "verdict": "running",
+      "note": ""
     }
   ],
   "legacy_cutoff": "20260921",
