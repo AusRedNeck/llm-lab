@@ -301,6 +301,59 @@
       "goal": "160M LR probe rung.",
       "verdict": "fail",
       "note": "2.4878 \u2014 same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack \u2014 open question."
+    },
+    {
+      "id": "m66m-4p5gb-40k",
+      "family": "m66m-owt4k-long",
+      "run_dirs": [
+        "20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined"
+      ],
+      "control_id": null,
+      "lever": {
+        "corpus": "openwebtext_combined->owt_4p5gb",
+        "steps": "40500",
+        "lr": "3e-4",
+        "eff_batch": "64",
+        "vocab": "bpe_owt4k"
+      },
+      "goal": "66.2M on the 4.5GB OWT slice, 40.5k steps, long-schedule run.",
+      "verdict": "closed",
+      "note": "early_stop fired; 66.19M params. Pre-50k-vocab era (4k vocab)."
+    },
+    {
+      "id": "pythia-owt50kv2-lr-15e-4-long",
+      "family": "pythia-owt50kv2-lr",
+      "run_dirs": [
+        "20260927_0752_pythia_rope_bpe_owt50k_v2_openwebtext_combined"
+      ],
+      "control_id": "p50k-lr-15e-4",
+      "lever": {
+        "dropout": "preset-default->0.1",
+        "rotary_pct": "unset->1.0 (FULL RoPE, NOT Pythia parity 0.25)",
+        "code": "explicit RoPE+dropout wired into the preset run (pre-parity-fix era)"
+      },
+      "goal": "Long 20k hold of the lr 1.5e-3 / 70M stack to watch the loss floor get eaten. Same corpus, eff_batch, lr and vocab as p50k-lr-15e-4 - the change is a longer schedule plus explicit RoPE+dropout, so its lesson is schedule-length only.",
+      "verdict": "closed",
+      "note": "early_stop; 70.65M. gnorm 0.255->0.711 while val bpb rose 1.6134->1.8682; floor ~step 2300 then eroded ~9200 steps. CAVEAT ON TRANSFER: the auto-diff shows the ONLY arg changes vs p50k-lr-15e-4 are dropout 0.1 and rotary_pct 1.0 - corpus, eff_batch, lr and vocab are all UNCHANGED, so this is a schedule-length extension, not a corpus/lr comparison. It also ran at rotary_pct 1.0 (full RoPE), NOT the Pythia-parity 0.25 the Pile arm uses, so its lr lesson transfers across a stack difference. Verdict directional only.",
+      "accepted_confounded": true
+    },
+    {
+      "id": "pile-native-tok-200step",
+      "family": "pile-corpus-probe",
+      "run_dirs": [
+        "20260928_0937_pythia_bpe_pythia_native_pile_train"
+      ],
+      "control_id": null,
+      "lever": {
+        "corpus": "owt50k_v2->pile(native tok)",
+        "steps": "200",
+        "lr": "3e-4",
+        "eff_batch": "8",
+        "vocab": "bpe_pythia_native"
+      },
+      "goal": "First Pile-corpus probe: does the hand-rolled BPE read Pile at all.",
+      "verdict": "closed",
+      "note": "200 steps, 70.65M, 18MB tokenized sample. Proved the pipeline; superseded by the byte-faithful HF-tokenizer cache (f5713c3)."
     }
   ],
   "legacy_cutoff": "20260921",
@@ -308,6 +361,25 @@
     "smoke_50k_pythia_m50m",
     "_abandoned_stubs_2026-09-15",
     "20260924_2059_pythia160_bpe_owt50k_v2_openwebtext_combined",
-    "20260924_2101_pythia160_bpe_owt50k_v2_openwebtext_combined"
-  ]
+    "20260924_2101_pythia160_bpe_owt50k_v2_openwebtext_combined",
+    "20260926_1157_m66m_rope_bpe_owt4k_openwebtext_combined",
+    "20260926_1308_m66m_rope_bpe_owt4k_owt_4p5gb_combined",
+    "20260926_1320_m66m_rope_bpe_owt4k_owt_4p5gb_combined",
+    "20260926_2200_pythia_rope_bpe_owt50k_v2_openwebtext_combined",
+    "20260929_1538_pythia_tokenizer_pile_train_full",
+    "20260929_1539_pythia_tokenizer_pile_train_full",
+    "20260929_1540_pythia_tokenizer_pile_train_full",
+    "20260929_1543_pythia_tokenizer_pile_train_full",
+    "20260929_1547_pythia_tokenizer_pile_train_full",
+    "20260929_1554_pythia_tokenizer_pile_train_full",
+    "20260929_1557_pythia_tokenizer_pile_train_full",
+    "20260929_1604_pythia_tokenizer_pile_train_full",
+    "20260929_1606_pythia_tokenizer_pile_train_full",
+    "20260929_1613_pythia_tokenizer_pile_train_full",
+    "20260929_1614_pythia_tokenizer_pile_train_full",
+    "20260929_1726_pythia256_tokenizer_pile_train_full",
+    "20260929_1726_pythia384_tokenizer_pile_train_full",
+    "20260929_1726_pythia768_tokenizer_pile_train_full"
+  ],
+  "ignore_dirs_note": "2026-09-29: unregistered dirs were classified, not blanket-ignored. Real evidence runs (m66m-4p5gb-40k, pythia-owt50kv2-lr-15e-4-long, pile-native-tok-200step) were registered as arms; the rest are calibration smokes (batch sweep for tok/s, 3-step ladder build checks, short 4k-vocab probes) plus one launch casualty. Calibration runs answer 'does it fit and how fast', not 'what did the model learn', so they carry no verdict and are ignored by name."
 }
