@@ -16,3 +16,6 @@ logs/
 .train.lock
 .train-watchdog.lock
 .DS_Store
+
+# local torch wheel (2.5GB, fetched for the cu126 build)
+torch-*.whl

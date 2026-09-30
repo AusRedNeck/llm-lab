@@ -19,11 +19,27 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+import json as _json
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from inference.generate import load_model
 from model.bpe import BPETokenizer
+
+
+def _load_tokenizer(path: str):
+    """Load tokenizer — auto-detects HF JSON-BPE vs our native BPE format."""
+    with open(path) as f:
+        header = _json.load(f)
+    # HF format has 'model' key with 'type': 'BPE'; native has 'vocab' at top level
+    if "model" in header and "type" in header["model"]:
+        # HF JSON-BPE (e.g. EleutherAI/pythia tokenizer)
+        from transformers import AutoTokenizer
+        parent = Path(path).parent
+        return AutoTokenizer.from_pretrained(parent), True
+    else:
+        # Our native BPE format
+        return BPETokenizer.load(path), False
 
 
 def score_pile(ckpt_path: str, tokenizer_path: str, slice_path: str,
@@ -43,7 +59,7 @@ def score_pile(ckpt_path: str, tokenizer_path: str, slice_path: str,
     model.eval()
     ctx, vocab = c["context_length"], c["vocab_size"]
 
-    tok = BPETokenizer.load(tokenizer_path)
+    tok, is_hf = _load_tokenizer(tokenizer_path)
     raw = Path(slice_path).read_bytes().decode("utf-8", errors="replace")
     tail = raw[int(len(raw) * (1.0 - tail_frac)):]  # never trained on: held-out by construction
     tail_bytes = len(tail.encode("utf-8"))
