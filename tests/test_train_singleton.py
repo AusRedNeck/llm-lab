@@ -34,10 +34,19 @@ def test_lock_rejects_second_owner_and_release_allows_next(tmp_path):
     second.release()
 
 
-def test_train_entrypoint_refuses_before_cuda_allocation():
+def test_train_entrypoint_refuses_before_cuda_allocation(monkeypatch, tmp_path):
     mod = runtime_lock_module()
-    lock = mod.acquire_train_lock(
-        mod.DEFAULT_LOCK_PATH, owner={"pid": os.getpid(), "note": "pytest owner"}
+    # Use a TEST-ONLY lock path via the env override. These tests deliberately
+    # contend for a real lock, so pointing them at the production
+    # DEFAULT_LOCK_PATH made them FAIL whenever a run was actually in flight:
+    # the live trainer holds that lock, the probe could never acquire it, and
+    # the test could not tell its own rejection from the trainer's. Same
+    # assertion, isolated from live state.
+    lock = tmp_path / "train.lock"
+    monkeypatch.setenv("LLM_TRAIN_LOCK", str(lock))
+    importlib.reload(mod)
+    held = mod.acquire_train_lock(
+        lock, owner={"pid": os.getpid(), "note": "pytest owner"}
     )
     probe_lines = [
         "import builtins, runpy, sys",
@@ -51,6 +60,7 @@ def test_train_entrypoint_refuses_before_cuda_allocation():
         "runpy.run_module('train.train', run_name='__main__')",
     ]
     probe = "\n".join(probe_lines)
+    env = {**os.environ, "LLM_TRAIN_LOCK": str(lock), "PYTHONPATH": str(LAB)}
     try:
         proc = subprocess.run(
             [sys.executable, "-u", "-c", probe],
@@ -58,22 +68,30 @@ def test_train_entrypoint_refuses_before_cuda_allocation():
             text=True,
             capture_output=True,
             check=False,
+            env=env,
             timeout=60,
         )
     finally:
-        lock.release()
+        held.release()
 
     output = proc.stdout + proc.stderr
     assert proc.returncode != 0
     assert "train.train singleton lock" in output
-    assert str(mod.DEFAULT_LOCK_PATH) in output
+    assert str(lock) in output
     assert "TORCH_IMPORTED" not in output
     assert "device=" not in output
 
 
-def test_train_wrapper_releases_lock_when_training_raises(monkeypatch):
+def test_train_wrapper_releases_lock_when_training_raises(monkeypatch, tmp_path):
     trainer = importlib.import_module("train.train")
-    mod = runtime_lock_module()
+    # Same isolation as above. train.train imports acquire_train_lock INSIDE
+    # main(), so there is no module attribute to patch — reloading
+    # train.runtime_lock with the env override set is what makes main() resolve
+    # the test lock path.
+    lock = tmp_path / "train.lock"
+    monkeypatch.setenv("LLM_TRAIN_LOCK", str(lock))
+    mod = importlib.reload(runtime_lock_module())
+    assert mod.DEFAULT_LOCK_PATH == lock
 
     def fail(_args):
         raise RuntimeError("synthetic training failure")
@@ -85,5 +103,5 @@ def test_train_wrapper_releases_lock_when_training_raises(monkeypatch):
     with pytest.raises(RuntimeError, match="synthetic training failure"):
         trainer.main()
 
-    next_owner = mod.acquire_train_lock(mod.DEFAULT_LOCK_PATH)
+    next_owner = mod.acquire_train_lock(lock)
     next_owner.release()
