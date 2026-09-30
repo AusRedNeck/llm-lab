@@ -174,13 +174,30 @@ PYTHIA160_12L768 = ModelConfig(
 
 # Pythia-scaled: 6L × 512H × 8 heads × FFN 2048. ~52M @ 16k vocab.
 # Reference: EleutherAI/pythia-70m uses the same arch (6/512/8/2048).
+#
+# DROPOUT 0.0 IS DELIBERATE PARITY, NOT A NEW CHOICE (2026-09-30). A field-by-field
+# diff of our resolved config against data/incoming/pythia70m_weights/config.json
+# showed exactly ONE divergence: pythia-70m ships NO dropout key at all, which is
+# GPTNeoX default 0.0, while this preset carried dropout=0.1. Everything else
+# matches: 6L/512d/8 heads, FFN 2048, vocab 50304, context_length 512, rotary_pct
+# 0.25, rotary base 10000, parallel residual, gelu, untied embeddings.
+#
+# The 0.1 was inherited from the OWT ladder (see the 2026-09-22 decision to keep a
+# consistent "our stack" across the capacity series). Once we are scoring against
+# open weights on a shared corpus, that consistency is worth less than parity, and
+# 10% dropout on every residual path is a direct cap on achievable bpb for free.
+#
+# NOTE: the capacity-series rungs below (PYTHIA_12L768, PYTHIA160_12L768) still
+# carry dropout=0.1 on purpose, so intra-series comparisons stay internally
+# consistent. Only the `pythia` preset - the one we compare to EleutherAI - is
+# changed. Do not "fix" the others in the same pass.
 PYTHIA_6L512 = ModelConfig(
     vocab_size=16256,     # overridden from bpe_owt16k at runtime
     context_length=512,
     embedding_dim=512,
     num_layers=6,
     num_heads=8,
-    dropout=0.1,
+    dropout=0.0,          # PARITY with EleutherAI/pythia-70m (no dropout key = 0.0)
     rotary_pct=0.25,      # Pythia: RoPE on 25% of head dims (GPT-NeoX config)
     use_rope=True,
     parallel_residual=True,
