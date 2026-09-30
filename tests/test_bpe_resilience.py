@@ -26,8 +26,8 @@ import token_io                                              # noqa: E402
 from model.bpe import BPETokenizer, _SPLIT                    # noqa: E402
 
 VOCAB = os.path.join(ROOT, "data", "bpe_owt16k.json")
-SHARD = os.path.join(ROOT, "data", "openwebtext", "shards",
-                     "train-00000-of-00080.txt")
+# Use the combined OWT file (sharded path was deprecated)
+SHARD = os.path.join(ROOT, "data", "openwebtext_combined.txt")
 
 
 def sample(chars: int = 200_000) -> str:

@@ -56,11 +56,13 @@ class Transformer(nn.Module):
         use_rope: bool = False,
         rotary_pct: float = 1.0,
         dropout: float = 0.0,
+        parallel_residual: bool = True,
     ):
         super().__init__()
 
         self.use_rope = use_rope
         self.rotary_pct = rotary_pct
+        self.parallel_residual = parallel_residual
         # Embedding dropout: same vectors, occasional blind spots in train.
         self.emb_drop = nn.Dropout(dropout)
         # Convert token IDs into vectors that the Transformer can process.
@@ -80,6 +82,7 @@ class Transformer(nn.Module):
                     use_rope=use_rope,
                     rotary_pct=rotary_pct,
                     dropout=dropout,
+                    parallel_residual=parallel_residual,
                 )
                 for _ in range(num_layers)
             ]
