@@ -15,6 +15,13 @@ class ModelConfig:
     num_layers: int = 4
     num_heads: int = 4
     dropout: float = 0.0
+    # Pythia / GPT-NeoX parity knobs. Defaults preserve the legacy GPT-2-style
+    # behaviour so existing presets are untouched; the Pythia presets below
+    # override them to match references/pythia-160m/config.json:
+    #   rotary_pct 0.25 (partial RoPE), use_rope True, use_parallel_residual True.
+    rotary_pct: float = 1.0          # fraction of head dims RoPE touches (Pythia=0.25)
+    use_rope: bool = False           # rotary positions instead of learned absolute
+    parallel_residual: bool = True   # attn + FFN branch from the same normed input
 
     def num_params(self) -> int:
         """Rough parameter count so we know what class we're training."""
@@ -160,6 +167,9 @@ PYTHIA160_12L768 = ModelConfig(
     num_layers=12,
     num_heads=12,
     dropout=0.1,
+    rotary_pct=0.25,      # Pythia: RoPE on 25% of head dims (config.json)
+    use_rope=True,
+    parallel_residual=True,
 )
 
 # Pythia-scaled: 6L × 512H × 8 heads × FFN 2048. ~52M @ 16k vocab.
@@ -171,6 +181,84 @@ PYTHIA_6L512 = ModelConfig(
     num_layers=6,
     num_heads=8,
     dropout=0.1,
+    rotary_pct=0.25,      # Pythia: RoPE on 25% of head dims (GPT-NeoX config)
+    use_rope=True,
+    parallel_residual=True,
+)
+
+# ============================================================================
+# OVERTRAINING LADDER (2026-09-29)
+#
+# Purpose: measure where the needle flattens. Same data, same tokenizer, same
+# val split as the `pythia` run -- only the model changes. Pythia-70m saw
+# 299,892,736,000 tokens / 70,426,624 params = 4,258 tokens/param. Our Pile is
+# 2,003,992,003 tokens, so the ladder spans ~28-66 tokens/param and Pythia
+# sits far past the end as the anchor. We cannot reach Pythia's ratio (that
+# would need 2,000B tokens); what we CAN see is where returns flatten below
+# that, which is the actionable half.
+#
+# Chinchilla's compute-optimal ratio is ~20 tokens/param, so 2.0B tokens
+# wants ~100M params -- between PYTHIA_6L512 (70M) and PYTHIA_12L768 (162M).
+#
+# head_dim is held at 64 on every rung (d/H = 64) so rotary_pct 0.25 keeps
+# the same relationship to head geometry as the reference Pythia models. A
+# ladder that changed head_dim would confound size with attention geometry.
+#
+# Vocab is overridden at runtime from the Pythia tokenizer (50,304), which is
+# what makes the ladder directly comparable to `pythia` and to open weights.
+# Embeddings are UNTied in our implementation, matching Pythia exactly:
+# pythia-70m is embed_in 25,755,648 + lm_head 25,755,648 + trunk 18,915,328.
+# ============================================================================
+
+# Ladder rung 1: d=384 / 6L / 6H. ~49M @ 50,304 vocab.
+# ~41 tokens/param on our Pile. Embedding-heavy (78%), so this measures
+# whether extra data keeps buying anything once the lookup table dominates.
+PYTHIA_6L384 = ModelConfig(
+    vocab_size=16256,     # overridden from the tokenizer file at runtime
+    context_length=512,
+    embedding_dim=384,
+    num_layers=6,
+    num_heads=6,          # 384/6 = 64 dims/head, same as pythia-70m
+    dropout=0.1,
+    rotary_pct=0.25,
+    use_rope=True,
+    parallel_residual=True,
+)
+
+# Ladder rung 2: d=256 / 6L / 4H. ~30M @ 50,304 vocab.
+# ~66 tokens/param. This is the FLOOR and it is deliberate: at 84.5%
+# embeddings the model is mostly a lookup table, and going lower stops
+# measuring data scaling and starts measuring memorization. Do not add rungs
+# below this -- the curve is already in the embedding-dominated regime, and a
+# smaller model would make the "gap" a statement about vocab size, not
+# about training.
+PYTHIA_6L256 = ModelConfig(
+    vocab_size=16256,     # overridden from the tokenizer file at runtime
+    context_length=512,
+    embedding_dim=256,
+    num_layers=6,
+    num_heads=4,          # 256/4 = 64 dims/head
+    dropout=0.1,
+    rotary_pct=0.25,
+    use_rope=True,
+    parallel_residual=True,
+)
+
+# Ladder rung 3: d=768 / 12L / 12H. ~162M @ 50,304 vocab.
+# The pythia-160m shape. ~12 tokens/param, so this rung is UNDER the
+# Chinchilla ratio on our data -- it is the over-parameterized end, and
+# losing to it at that ratio is evidence the model was too big for the
+# corpus, not that the corpus was too small.
+PYTHIA_12L768 = ModelConfig(
+    vocab_size=16256,     # overridden from the tokenizer file at runtime
+    context_length=512,
+    embedding_dim=768,
+    num_layers=12,
+    num_heads=12,         # 768/12 = 64 dims/head
+    dropout=0.1,
+    rotary_pct=0.25,
+    use_rope=True,
+    parallel_residual=True,
 )
 
 # M70 class, built for the Pythia-70M fight (~66M at 4k vocab).
