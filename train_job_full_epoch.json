@@ -1,0 +1,36 @@
+{
+  "name": "pile-pythia-full-epoch",
+  "desc": "FULL-EPOCH Pythia-70M-shape run on the Pile: one pass over the full 2,003,992,003-token cache at eff batch 131,072 (micro 16 x accum 16), ctx512, dropout 0.0 (exact EleutherAI parity), lr 5e-4 cosine. Chained to fire unattended after the eff-128k 5k probe (pile-eff128k-5k) finishes, because that probe is the CONTROL this arm is read against.",
+  "python": "D:/Projects/llm-lab/.venv/Scripts/python.exe",
+  "log": "logs/pile-pythia-full-epoch.log",
+  "ckpt_dir": "checkpoints",
+  "target_steps": 15136,
+  "stamp": "",
+  "run_name": "",
+  "max_restarts": 3,
+  "min_progress_steps": 200,
+  "match": [
+    "train.train",
+    "--preset",
+    "pythia"
+  ],
+  "completed": false,
+  "next_job": null,
+  "notes": "SINGLE LEVER vs nothing-previous is wrong to claim: this differs from pile-eff128k-5k in THREE ways - (1) it is a full 15,136-step epoch vs a 5,000-step probe, (2) dropout 0.1 -> 0.0 (commit a966f1e, EleutherAI parity), (3) the cosine schedule is stretched over 15,136 steps instead of 5,000, so the LR decay shape differs. That third one is unavoidable and is NOT a confound in the harmful direction - a longer cosine keeps LR higher for longer, which is the direction that helped. Read this as 'the real run', not as a clean single-lever arm against the 5k probe.\n\nWHY 15,136 AND NOT ~10,794: Chinchilla-optimal for 70.7M is 20 tok/param = 1.41B tokens = step 10,794 (71% of an epoch). We run the full epoch to 28 tok/param because the 5k probe is STILL descending at 9.26 tok/param (best 1.5398, no knee, six rising evals all inside a +/-0.02 noise band). Stopping at 10,794 is defensible only if the curve has flattened by then; val_every 200 gives 76 evals so the flatten point will be visible in the log and the run can be stopped there if it is clearly flat. Degrade guard (0.15) fires the abort if it turns for real.\n\nLEVER HISTORY - what actually moved the needle, all single-lever from the killed eff-16k control:\n  eff batch 16,384 -> 131,072 : knee moved from 0.69 tok/param to past 6.49; best bpb 1.9683 -> 1.5398. THE win.\n  lr 5e-4 -> 2.5e-4        : no effect on knee location (both turned ~3-4k steps). Retired.\n  dropout 0.1 -> 0.0       : parity fix, free, untested at scale.\n  ctx 512                  : ALREADY Pythia-70m parity. Not a lever. (I was wrong earlier that pythia-70m trains at 2048; that is max_position_embeddings, the addressing ceiling. Its TRAINING length is 512, per the EleutherAI/pythia README size table.)\n\nREFERENCE FRAMING - pythia-70m's bpb 1.2727 is an ASYMPTOTE, NOT A TARGET. Pythia trained 143,000 steps x 2,097,152 tokens = 300B tokens = 4,258 tok/param = 212x Chinchilla optimal. Our full epoch is 28 tok/param = 1.4x optimal. Pythia saw 151x more tokens than we ever will. Do not read the gap to 1.2727 as a failure; the implementation is verified correct (field-for-field config parity with pythia-70m, same tokenizer, same held-out val slice, same bpb formula). The number that should guide stopping is where OUR curve flattens, expected near step 10,794.",
+  "train_args": [
+    "--preset", "pythia",
+    "--tokenizer", "data/incoming/pythia70m_hf/tokenizer.json",
+    "--tok_cache", "data/pile_train_full_bpe_pythia70m.bin",
+    "--corpus", "data/pile_train_full.txt",
+    "--lr", "5e-4",
+    "--steps", "15136",
+    "--batch", "16",
+    "--accum", "16",
+    "--val_every", "200",
+    "--val_frac", "0.01",
+    "--out", "checkpoints",
+    "--patience-frac", "0",
+    "--min-steps-frac", "0.5",
+    "--degrade-frac", "0.15"
+  ]
+}
