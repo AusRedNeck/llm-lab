@@ -6,9 +6,18 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_LOCK_PATH = Path(__file__).resolve().parents[1] / ".train.lock"
-DEFAULT_WATCHDOG_LOCK_PATH = (
-    Path(__file__).resolve().parents[1] / ".train-watchdog.lock"
+# LLM_TRAIN_LOCK / LLM_TRAIN_WATCHDOG_LOCK redirect the singleton to another
+# path. This exists so tests can contend for a REAL lock without fighting a real
+# training run: patching DEFAULT_LOCK_PATH after import does not work, because
+# acquire_train_lock binds `path=DEFAULT_LOCK_PATH` in its own signature at
+# import time. Unset in production, so the guard is unchanged there.
+DEFAULT_LOCK_PATH = Path(
+    os.environ.get("LLM_TRAIN_LOCK")
+    or (Path(__file__).resolve().parents[1] / ".train.lock")
+)
+DEFAULT_WATCHDOG_LOCK_PATH = Path(
+    os.environ.get("LLM_TRAIN_WATCHDOG_LOCK")
+    or (Path(__file__).resolve().parents[1] / ".train-watchdog.lock")
 )
 
 
