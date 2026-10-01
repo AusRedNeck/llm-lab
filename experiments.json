@@ -115,7 +115,7 @@
       },
       "goal": "16k LR ladder rung (beyond bracket).",
       "verdict": "fail",
-      "note": "1.7433 \u2014 past the knee, ladder bracketed at 3e-3."
+      "note": "1.7433 — past the knee, ladder bracketed at 3e-3."
     },
     {
       "id": "p50k-lr-1e-3",
@@ -161,7 +161,7 @@
       },
       "goal": "50k 70M LR probe rung.",
       "verdict": "closed",
-      "note": "1.7466 \u2014 worse than 1.5e-3, curve turning."
+      "note": "1.7466 — worse than 1.5e-3, curve turning."
     },
     {
       "id": "p50k-lr-3e-3",
@@ -176,7 +176,7 @@
       },
       "goal": "50k 70M LR probe rung (bracket test).",
       "verdict": "fail",
-      "note": "2.5025 \u2014 degenerate plateau, ladder bracketed, 1.5e-3 selected for exp015."
+      "note": "2.5025 — degenerate plateau, ladder bracketed, 1.5e-3 selected for exp015."
     },
     {
       "id": "exp014-m50m-50k",
@@ -206,9 +206,9 @@
         "dropout": "null -> 0.1 declared (NO-OP: preset default was already 0.1)",
         "note": "long extension of the winning probe arm"
       },
-      "goal": "Capacity axis rung 1: SMALLER trunk on 50k \u2014 is the m50m failure shape-specific?",
+      "goal": "Capacity axis rung 1: SMALLER trunk on 50k — is the m50m failure shape-specific?",
       "verdict": "pass",
-      "note": "Best 1.4699 @12000 (frozen audit 1.4692), stopped 15000. Clean successor of the 1.5e-3 probe (same preset/lr/eff/vocab). Its superiority vs exp014 is the confounded preset+lr+eff_batch comparison across those two arms \u2014 see exp014 note.",
+      "note": "Best 1.4699 @12000 (frozen audit 1.4692), stopped 15000. Clean successor of the 1.5e-3 probe (same preset/lr/eff/vocab). Its superiority vs exp014 is the confounded preset+lr+eff_batch comparison across those two arms — see exp014 note.",
       "accepted_confounded": true
     },
     {
@@ -258,7 +258,7 @@
       },
       "goal": "Single-lever (architecture parity) re-run of the collapsed 160M arm. Questions: survive step 4000? beat 70M frozen 1.4692?",
       "verdict": "pass",
-      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure \u2014 clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) \u2014 neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
+      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure — clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) — neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
     },
     {
       "id": "p160-lr-5e-4",
@@ -272,7 +272,7 @@
       },
       "goal": "160M LR probe (1000 steps, eff64).",
       "verdict": "pass",
-      "note": "1.7280 bpb @1000 \u2014 only sane rung; selected for the long arms."
+      "note": "1.7280 bpb @1000 — only sane rung; selected for the long arms."
     },
     {
       "id": "p160-lr-1e-3",
@@ -286,7 +286,7 @@
       },
       "goal": "160M LR probe rung.",
       "verdict": "fail",
-      "note": "2.4876 \u2014 degenerate plateau."
+      "note": "2.4876 — degenerate plateau."
     },
     {
       "id": "p160-lr-15e-4",
@@ -300,7 +300,7 @@
       },
       "goal": "160M LR probe rung.",
       "verdict": "fail",
-      "note": "2.4878 \u2014 same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack \u2014 open question."
+      "note": "2.4878 — same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack — open question."
     },
     {
       "id": "m66m-4p5gb-40k",
@@ -399,24 +399,24 @@
       "lever": {
         "eff_batch": "16384->131072 (micro 16 x accum 16, LR held)"
       },
-      "goal": "Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m: ONLY eff_batch changes 16,384 -> 131,072. Both killed LR arms showed  RISING after the knee (model stops fitting its own training batches = steps too large, not overfitting) and both gaps flat, so the lever is step noise, not LR and not data. 5,000 steps = 655M tokens = 9.26 tok/param = 13x the control's 0.69 tok/param knee point. If batch is the lever, val will still be descending where the control turned over at 49M tokens.",
-      "verdict": "running",
-      "note": "IN FLIGHT as of 2026-09-30. best val bpb 1.5398 @ step 3400 = 445,644,800 tokens = 6.30 tok/param, 36 evals, still descending with no knee. CONTROL pile-full-diet-70m (eff 16,384) bested 1.9683 at 0.69 tok/param then turned over. WHY BATCH WAS THE LEVER: the three-way eval on both killed LR arms showed `served` (loss on the batches just trained on) RISING after the knee - the model stopped fitting its own training data, which is step noise, not overfitting - and both diagnostic gaps were flat, ruling out a data problem and data-recycling. lr 5e-4 and 2.5e-4 turned over at the SAME ~3-4k steps, which retired lr as the lever. CONFIG CHOICE (measured, not guessed): micro 32 x accum 8 hit 16,001MB of 16,376MB = 98% of the card and thrashed the allocator to 18,556 tok/s; micro 16 x accum 16 = 12,017MB at 77,464 tok/s - 8x A's effective batch AND faster than A. Logits are batch x ctx x vocab, so MICRO-batch drives VRAM while accumulation is free. NOTE drop 0.1 HERE vs 0.0 in the chained full epoch (commit a966f1e, EleutherAI parity) - this arm is the control for that change. Full epoch is 15,136 steps and is NOT a clean single-lever comparison: it also stretches the cosine schedule 3x longer."
+      "goal": "Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m: ONLY eff_batch changes 16,384 -> 131,072. Both killed LR arms showed `served` RISING after the knee (model stops fitting its own training batches = steps too large, not overfitting) and both gaps flat, so the lever is step noise, not LR and not data. 5,000 steps = 655M tokens = 9.26 tok/param = 13x the control's 0.69 tok/param knee point.",
+      "verdict": "pass",
+      "note": "COMPLETED 2026-09-30 11:43 PDT, all 5,000 steps, no early stop, no degrade-guard abort. BEST val bpb 1.53965 @ step 5000 (4.1732 nats) = 655,360,000 tokens = 9.26 tok/param. It never turned over: served loss kept RISING against val, so the batch lever held all the way to the ceiling of this probe. THE CONFIRMED WIN - eff batch 16,384 -> 131,072 moved the knee from 0.69 tok/param to past 9.26 (13x), and best bpb 1.9683 -> 1.5396 (-0.429). THE THIRD LEVER IS RETIRED: lr 5e-4 and 2.5e-4 turned over at the SAME ~3-4k steps on the eff-16k arm, so lr was never the variable. CONFIG CHOICE (measured, not guessed): micro 32 x accum 8 hit 16,001MB of 16,376MB = 98% of the card and thrashed the allocator down to 18,556 tok/s; micro 16 x accum 16 = 12,017MB at 77,464 tok/s - 8x the effective batch AND faster. Logits are batch x ctx x vocab, so MICRO-batch drives VRAM while accumulation is free. The full epoch that follows drops dropout 0.1 -> 0.0 (commit a966f1e, EleutherAI parity) and stretches the cosine 3x, so it is NOT a clean single-lever read against this probe."
     },
     {
       "id": "pile-pythia-full-epoch",
-      "family": "pile-batch-knee",
-      "run_dirs": [],
+      "family": "pile-chinchilla-epoch",
+      "run_dirs": [
+        "20260930_1143_pythia_tokenizer_pile_train_full",
+        "20260930_2055_pythia_tokenizer_pile_train_full"
+      ],
       "control_id": "pile-eff128k-5k",
       "lever": {
-        "steps": "5000 -> 15136 (one full epoch over the 2,003,992,003-token cache)",
-        "dropout": "0.1 -> 0.0 (EleutherAI parity, commit a966f1e)",
-        "schedule": "cosine stretched 3x longer - UNAVOIDABLE, and not a harmful confound (higher LR for longer is the direction that helped)",
-        "val_every": "100 -> 200"
+        "code": "a966f1e pythia preset dropout 0.1->0.0 (EleutherAI parity; resolved cfg 0.1->0.0)"
       },
-      "goal": "THE REAL RUN. Full-epoch Pythia-70M-shape model on the Pile at eff batch 131,072 (micro 16 x accum 16), ctx512, dropout 0.0, lr 5e-4 cosine. Chained unattended after pile-eff128k-5k. 7.1h at the measured 77,464 tok/s.",
-      "verdict": "pending",
-      "note": "READ AS 'the real run', NOT as a clean single-lever arm: it differs from pile-eff128k-5k in steps, dropout AND schedule shape. STOPPING RULE: Chinchilla-optimal for 70.7M is 20 tok/param = 1.41B tokens = step 10,794 (71% of an epoch); we run the full 15,136 because the 5k probe is STILL descending at 9.26 tok/param. 75 evals at val_every 200 make the flatten point visible in the log - stop there if it is clearly flat, since that is the compute-optimal end. The 0.15 degrade guard aborts a genuine turn. REFERENCE FRAMING: pythia-70m's bpb 1.2727 is an ASYMPTOTE, NOT A TARGET - it trained 300B tokens = 4,258 tok/param = 212x Chinchilla; our full epoch is 28 tok/param = 1.4x, and Pythia saw 151x more tokens than we ever will. The implementation is verified correct (field-for-field config parity, same tokenizer, same held-out val slice, same bpb formula)."
+      "verdict": "running",
+      "goal": "FULL EPOCH over the Pile at Pythia-70M parity: one pass over the 2,003,992,003-token cache = 15,136 steps at eff batch 131,072 (micro 16 x accum 16), ctx 512, dropout 0.0, lr 5e-4 cosine. TARGET IS CHINCHILLA, not pythia-70m's 1.2727: 20 tok/param = step 10,794 predicts ~1.36 bpb; pass mark ~1.42 bpb at step 10,794. pythia-70m saw 4,258 tok/param (212x Chinchilla, 300B tokens), so its number is an ASYMPTOTE, not a reachable target.",
+      "note": "TWO LAUNCH ATTEMPTS ON ONE ARM. (1) 20260930_1143 ABORTED BY OPERATOR at step 856 (~19 min GPU) so Shane could use the card; curve kept at runs/20260930_1143_pythia_tokenizer_pile_train_full/loss.jsonl (val bpb 2.0138 @600, 1.9785 @800, still descending). Its numbers are NOT comparable to the 5k probe - the probe's cosine was fully cooled by step 5,000 while this attempt was still at ~5.0e-4, so the hotter LR is schedule position, not a regression. (2) 20260930_2055 RESTARTED FRESH at step 0 rather than resuming the aborted weights, because a mid-cosine resume would restart the LR schedule against a stale early-stop ledger. Do NOT compare this arm's step-5000 to the probe's 1.5396: same tokens seen, but the cosine here is stretched over 15,136 so LR is still ~3.9e-4 at step 5,000. Compare final-to-final. GRADED READING: a small constant offset (+0.16 to +0.22 nats vs the Chinchilla fit, shrinking) is expected from a population regression; a GROWING gap is the failure mode and is what killed the eff-16k arm. Disk: checkpoints already 163G, D: has 1.15TB free, this run adds ~21G."
     }
   ],
   "legacy_cutoff": "20260921",
