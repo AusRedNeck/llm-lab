@@ -19,5 +19,9 @@ cd /d D:\Projects\llm-lab
 if not exist logs mkdir logs
 
 echo === run_train.bat start %date% %time% args=[%*] === >> logs\train_launch.out
-"C:\Users\shane\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe" train_launch.py %* >> logs\train_launch.out 2>&1
+REM scripts\ prefix is load-bearing: the launcher lives in scripts\ and a bare name makes
+REM cmd fall back to PATHEXT, which does NOT include .py - it searches the current dir for
+REM run_train.py and finds nothing, so the task "succeeds" and no trainer ever starts.
+REM Silent no-op, Last Result 1 on the task, zero trainer: the signature of a dead chain.
+"C:\Users\shane\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe" scripts\train_launch.py %* >> logs\train_launch.out 2>&1
 echo === run_train.bat exit %errorlevel% at %date% %time% === >> logs\train_launch.out
