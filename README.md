@@ -8,7 +8,46 @@ The point isn't the model. The point is that every number here traces to a run
 directory, and every experiment is an *arm* with a declared lever, a control, and
 a verdict. Several of our worst mistakes turned out to be measurement bugs.
 
-**Status: we beat `EleutherAI/pythia-70m` at matched tokens.**
+## Purpose
+
+Learn by building a small language model from scratch, then progressively
+introduce modern techniques and a tool harness. Nothing here is borrowed
+architecture — the tokenizer, the model, and the trainer were written to be
+read, and every architectural choice is argued for in the commit that made it.
+
+## Principles
+
+- Understand before abstracting.
+- Keep model and harness separate.
+- Prefer measurable experiments.
+- Reproduce experiments across machines.
+- Record what changed and what happened.
+- **Compare like-for-like, or don't quote the percentage.** Every wrong verdict
+  we produced came from a mismatched denominator — token count, val slice, vocab.
+
+## How this was built
+
+Hand-rolled, solo-directed, AI-assisted. The architecture, the experiment
+levers, and the verdicts are a person's decisions; AI tooling helped draft,
+review, and catch things a green test suite had missed.
+
+That last part is not a disclaimer, it's the interesting bit. The two worst bugs
+in this repo were both found by tooling reading the code carefully and
+disagreeing out loud:
+
+- `scripts/token_io.py --resume` opened the cache `"r+b"` without ever seeking,
+  so resuming **overwrote the head of the file it was supposed to be
+  continuing**. Latent since day one, invisible because nothing ever compared a
+  resumed cache against a one-shot encode.
+- `scripts/readme_state.py --check` compared a value derived from the very
+  commit it was written into, so the gate could never pass. That is why the
+  dashboard shipped showing a finished run as "running".
+
+Both fixes are in the history with the measurements that caught them.
+
+See **[AUTHORS.md](AUTHORS.md)** for attribution.
+
+## Status: beating `EleutherAI/pythia-70m` at matched tokens
 
 | | bpb @ ctx 512 | tokens seen |
 |---|---|---|
@@ -164,16 +203,6 @@ python audit_run_data.py                        # data integrity audit
 `run_train.bat` → `train_launch.py` → trainer. Task Scheduler is the parent, so
 app restarts can't kill a run. Resume always takes the newest **step**
 checkpoint, never `_best.pt`.
-
-## Principles
-
-- Understand before abstracting.
-- Keep model and harness separate.
-- Prefer measurable experiments.
-- Reproduce across machines.
-- Record what changed and what happened.
-- **Compare like-for-like, or don't quote the percentage.** Every wrong verdict
-  we produced came from a mismatched denominator — token count, val slice, vocab.
 
 ## Machines
 
