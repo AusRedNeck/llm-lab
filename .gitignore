@@ -22,3 +22,7 @@ torch-*.whl
 
 # watcher latch (runtime state, per-machine)
 watch_active_arm.state.json
+watcher_announced.json
+
+# watcher self-test scratch (synthetic jobNEW fixtures, not run history)
+archive/ops/**/_wtest/

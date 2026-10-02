@@ -1,0 +1,15 @@
+{
+  "status": "exhausted",
+  "relaunch_count": 6,
+  "strikes": 0,
+  "last_relaunch": "2026-09-19T15:38:57",
+  "last_resume_step": null,
+  "checked_at": "2026-09-20T14:33:56",
+  "pid": 12376,
+  "watchdog_last_step": null,
+  "watchdog_last_at": "2026-09-19T13:48:58",
+  "last_launch": "2026-09-19T10:53:17",
+  "last_exit_code": 1,
+  "final_step": 4800,
+  "reason": "early-stop guard fired"
+}
