@@ -1,0 +1,13 @@
+{
+  "gap_bpb": 0.228,
+  "gap_ci95": [
+    0.2237,
+    0.233
+  ],
+  "ours_bpb": 1.4458,
+  "pythia70m_bpb": 1.2178,
+  "regions": 16,
+  "tokens_per_region": 1245184,
+  "eval_cycle_length": 5,
+  "note": "stratified contiguous regions; block bootstrap over regions; absolute bpb inflated vs a random-crop estimate because the tail regions differ in intrinsic difficulty"
+}
