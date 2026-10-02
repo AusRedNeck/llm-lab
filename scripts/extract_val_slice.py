@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
-"""Extract the EXACT held-out val slice our Pile runs were scored on, as raw text.
+"""RETIRED 2026-10-01 -- this script produced an INVALID eval fixture. Do not re-run it.
 
-WHY THIS FILE EXISTS
-    The open-weights comparison is only valid if both models are scored on the
-    SAME bytes with the SAME encoder. Our trainer's val set is the last 1% of
-    the token cache by token index (`split_corpus`: cut = int(len*0.99)), i.e.
-    the tail of data/pile_train_full.txt. The existing pile_deduped_slice.txt
-    is a DIFFERENT file, so scoring pythia-70m against it would compare two
-    models on two different texts and the "gap" would be meaningless.
+WHAT WENT WRONG
+    This wrote data/incoming/pile_val_slice.txt by DECODING the held-out token ids to
+    text. The scorers then re-tokenized that text. decode -> write -> re-encode is LOSSY,
+    and the round trip does not reproduce the original ids. Measured against the cache:
 
-    So: replay the tokenizer over the tail of the corpus, take exactly the
-    tokens past the cut index, and decode them back to text. That text is what
-    both models must be scored on.
+        cache tail      20,039,921 tokens
+        re-tokenized    20,039,764 tokens      (-157)
+        first divergence at index 42,843
+        overlapping ids identical: 1.6760%       <- 1.68%, not "exact"
 
-    Tokens are not byte-aligned, so decoding the tail can land mid-sequence at
-    the edges. That is fine and expected: it is the same val text our runs saw,
-    so it is the correct denominator. Do NOT try to make it prettier.
+    The old meta.json called this "Exact replay of split_corpus". That was a claim in a
+    comment, never a measurement, and it was false.
 
-Usage:  python scripts/extract_val_slice.py
-Writes: data/incoming/pile_val_slice.txt  + a .meta.json recording provenance
+CONSEQUENCE
+    reports/pythia70m_reference.json (bpb 1.2727) was measured on the WRONG ids, so every
+    "gap to pythia-70m" built on it is suspect. Fixed 2026-10-01: both scorers now read the
+    ids straight from the memmapped .bin, with no tokenizer in the path at all.
+
+THE RULE THIS FILE EXISTS TO TEACH
+    Never route held-out eval data through text. Score the raw token ids. A "clean"
+    human-readable fixture is worth nothing if it is not token-identical to what the
+    trainer actually held out -- and there is no cheap way to be sure it is.
+
+See: scripts/verify_val_slice_identity.py (the proof), and
+     .hermes/plans/2026-10-01_eval-fixture-bug.md
+
+The code below is kept only so the diff that produced the bad fixture stays readable.
+Everything from here on is retained verbatim and unsafe.
 """
 import json
 import os
@@ -55,6 +65,7 @@ def main():
     nbytes = os.path.getsize(OUT)
     print(f"wrote {OUT} ({nbytes:,} bytes, {len(text):,} chars)")
 
+    # !! DO NOT USE THIS OUTPUT. Kept only for the historical diff; see the module docstring.
     out_meta = {
         "source_txt": "data/pile_train_full.txt",
         "token_cache": "data/pile_train_full_bpe_pythia70m.bin",
@@ -64,8 +75,13 @@ def main():
         "cut_index": cut,
         "val_tokens": int(val_ids.shape[0]),
         "bytes": nbytes,
-        "note": "Exact replay of split_corpus(corpus, 0.01, ctx): the last 1% of "
-                "the token cache. Score EVERY model on this file to compare.",
+        "INVALID": True,
+        "invalidated": "2026-10-01",
+        "note": "THIS FIXTURE IS NOT TOKEN-IDENTICAL TO THE TRAINER'S VAL SET. "
+                "1.68% of positions match the cache tail; it diverges at index 42843. "
+                "Do NOT score models on this file and do NOT quote the 1.2727 reference "
+                "derived from it. Read ids from the .bin directly "
+                "(see score_pythia70m_reference.py --source cache).",
     }
     json.dump(out_meta, open(OUTMETA, "w", encoding="utf-8"), indent=2)
     print(f"wrote {OUTMETA}")

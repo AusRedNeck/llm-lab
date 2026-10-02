@@ -344,6 +344,131 @@ def early_stop_update(best: float, val: float, bad: int, patience: int,
     return best, bad, bad >= patience
 
 
+def eval_cycle_length(evals_bpb: list, max_period: int = 8) -> int:
+    """Recover the eval sampler's period by autocorrelation of the val series.
+
+    Measured on the 70M Pile run: the eval is NOT fresh noise. eval_three_way() draws
+    val windows with get_batch(), which calls torch.randint on the GLOBAL RNG, and the
+    number of draws between consecutive evals is constant (1000 steps x batch). So the
+    RNG advances by a fixed amount per eval and the sampler lands on the SAME handful of
+    window sets in rotation, forever. Median |diff| between v[i] and v[i+5] was 0.0004 bpb
+    versus 0.035 for non-multiples of 5 -- a deterministic 5-cycle, not jitter.
+
+    That matters because a min over a periodic series is a biased statistic: it always
+    lands on whichever phase is easiest, so it sits a fixed distance BELOW the true
+    score and never moves even when the model has stopped learning. Both the keeper and
+    the saturation guard must work on the unwrapped envelope instead.
+
+    Returns the period in evals (1 = no detectable cycle, i.e. genuinely noisy).
+    """
+    n = len(evals_bpb)
+    if n < 2 * max_period + 2:
+        return 1
+    lo, hi = n // 2, n  # ignore the descending warmup; structure is a late-run property
+    tail = evals_bpb[lo:hi]
+    best_p, best_err = 1, None
+    for p in range(2, max_period + 1):
+        diffs = [abs(tail[i + p] - tail[i]) for i in range(len(tail) - p)]
+        if not diffs:
+            continue
+        err = sorted(diffs)[len(diffs) // 2]  # median, robust to the trend itself
+        if best_err is None or err < best_err:
+            best_p, best_err = p, err
+    # Require the cycle to be clearly better than "no structure" or it is just a fit
+    # to the residual trend. A median within 40% of the p=1-ish noise floor is noise.
+    if best_err is None:
+        return 1
+    floor = sorted([abs(tail[i + 1] - tail[i]) for i in range(len(tail) - 1)])
+    floor_err = floor[len(floor) // 2] if floor else 0.0
+    if floor_err <= 0 or best_err > 0.6 * floor_err:
+        return 1
+    return best_p
+
+
+def envelope(evals_bpb: list, period: int = 0) -> tuple[list, int]:
+    """Unwrap the eval cycle into a per-round MEAN, the unbiased score estimate.
+
+    Returns (envelope_values, period_used). The mean over a whole cycle cancels the
+    per-window-set difficulty differences, which is exactly what the min cannot do: a
+    min over a periodic series tracks the easiest phase and is biased low by the cycle
+    amplitude (measured 0.0399 bpb on the 70M run).
+
+    A trailing partial round is DROPPED. A partial round mixes phases and reintroduces
+    the very bias this removes; better to lose up to period-1 points of resolution than
+    to report a number that is not comparable to earlier rounds.
+    """
+    p = period or eval_cycle_length(evals_bpb)
+    if p <= 1 or len(evals_bpb) < 2 * p:
+        return list(evals_bpb), 1
+    rounds = []
+    for i in range(len(evals_bpb) // p):
+        rounds.append(sum(evals_bpb[i * p:(i + 1) * p]) / p)
+    return rounds, p
+
+
+def envelope_min(evals_bpb: list, window: int) -> list:
+    """Lower envelope of a val series: the min of each block of `window` evals.
+
+    DEPRECATED as a decision statistic (2026-10-01). This tracks the LOW phase of the
+    eval cycle, which is the same biased-low statistic that made best_bpb read 0.0399 bpb
+    below the true score. Kept only because the saturation guard's block arithmetic still
+    references it and existing replays import it. New code should use envelope(), which
+    takes the per-round MEAN and is unbiased.
+
+    Prefer: envelope(evals_bpb) -> (per-round means, period)
+    """
+    w = max(1, int(window))
+    full = len(evals_bpb) // w
+    return [min(evals_bpb[i * w:(i + 1) * w]) for i in range(full)]
+
+
+def flat_envelope_stop(evals_bpb: list, window: int, flat_delta: float,
+                       step: int, steps: int, flat_frac: float,
+                       val_every: int, min_step: int = 0) -> bool:
+    """True when the UNBIASED envelope has stalled: no per-round-mean improvement.
+
+    Guards the failure mode neither --degrade-frac nor --patience-frac covers: a curve
+    that stops improving WITHOUT rising. On the 70M full-epoch run the envelope pinned
+    at ~1.4432 bpb from step ~6200 onward while the train-val gap widened 0.1841 ->
+    0.2786 nats -- overfitting onset, invisible to a rise-only threshold.
+
+    CALIBRATED ON THE ENVELOPE, NOT ON best_bpb (2026-10-01). The first version of this
+    guard was tuned against the min-tracked series and inherited that statistic's
+    0.0399 bpb low bias, so its thresholds were meaningless: it read a saturated run as
+    still improving. It now unwraps the eval cycle and thresholds the per-round MEAN.
+
+    `window` is retained for signature compatibility but is no longer used to build the
+    statistic -- the period is detected from the data. A stall budget of N ROUNDS
+    (not blocks of N evals) is what actually bounds the decision.
+
+    The stall must persist for `flat_frac` x steps so ordinary slow patches and a cooling
+    cosine tail cannot trip it, and it never fires before `min_step`.
+    """
+    if flat_frac <= 0 or steps <= 0:
+        return False
+    if step < min_step:
+        return False
+    env, period = envelope(evals_bpb)
+    if period <= 1 or len(env) < 2:
+        # No detectable cycle: fall back to the raw series only if it is long enough to
+        # judge. A short, cycle-free series is not evidence of a stall.
+        if len(evals_bpb) < 8:
+            return False
+        env = list(evals_bpb)
+        period = 1
+    # How many ROUNDS of envelope fit inside the stall budget?
+    round_steps = max(1, period * max(1, val_every))
+    rounds_back = max(1, int(round(flat_frac * steps / round_steps)))
+    if rounds_back + 1 > len(env):
+        return False  # not enough history yet to judge a stall this long
+    newest = env[-1]
+    prior = env[-(rounds_back + 1):-1]
+    # Still improving if ANY round in the budget beat the newest by more than the delta.
+    if any(p > newest + flat_delta for p in prior):
+        return False
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="s11m", choices=list(PRESETS))
@@ -397,6 +522,23 @@ def main():
                          "memorisation (exp 010) was +143%%. A 0.05 threshold sits "
                          "INSIDE the noise band and aborts a healthy run -- keep it "
                          "well clear of the noise (default 0.30)")
+    ap.add_argument("--flat-frac", type=float, default=0.0,
+                    help="SATURATION guard: abort if the lower envelope of val has not "
+                         "improved by more than --flat-delta within this fraction of "
+                         "--steps. 0 = off. A curve that flattens without RISING is "
+                         "overfitting onset, and neither --degrade-frac (needs a rise) "
+                         "nor --patience-frac (fires on raw-eval jitter) can see it. "
+                         "Envelope = min val_bpb per block of --flat-window evals; "
+                         "raw evals are not usable directly because this harness emits a "
+                         "repeating sawtooth (~4-eval period) that would reset any "
+                         "threshold. Calibrate --flat-window to that period, not to 1.")
+    ap.add_argument("--flat-window", type=int, default=4,
+                    help="evals per envelope block for --flat-frac (default 4, the "
+                         "measured sawtooth period on the 70M Pile run)")
+    ap.add_argument("--flat-delta", type=float, default=0.005,
+                    help="minimum envelope improvement (bpb) that counts as progress "
+                         "for --flat-frac. Must exceed the eval-to-eval noise band or "
+                         "jitter resets the guard forever (default 0.005 bpb)")
     ap.add_argument("--run_dir", default="runs",
                     help="loss.jsonl + samples land here per run")
     ap.add_argument("--accum", type=int, default=1,
@@ -491,6 +633,7 @@ def _train(args):
     resume_bad_checks = 0
     resume_stamp = None
     resume_run_name = None
+    resume_eval_bpb = None
     if args.resume:
         r = torch.load(args.resume, map_location=device, weights_only=False)
         rc = r["cfg"]
@@ -510,6 +653,10 @@ def _train(args):
         elif r.get("val_bpb"):
             resume_best_bpb = float(r["val_bpb"])
         resume_bad_checks = int(r.get("bad_checks") or 0)
+        # The saturation guard's envelope needs the val history, not just the best. A
+        # checkpoint that carries only best_bpb would let every restart silently reset
+        # stall detection, which is exactly the bug class this guard exists to prevent.
+        resume_eval_bpb = r.get("eval_bpb")
         # Inherit the run identity from the filename stamp and/or the saved run_name.
         _m = re.search(r"_(\d{12})_", os.path.basename(args.resume))
         resume_stamp = _m.group(1) if _m else None
@@ -773,20 +920,34 @@ def _train(args):
     if val_corpus is not None:
         print(f"  val normalisation: {bpt:.4f} bytes/token -> "
               f"bpb = val * {bpb_factor:.4f}")
-        print(f"  early stop: {patience_checks} checks "
-              f"({patience_checks * args.val_every} steps) of flat bpb; "
-              f"no plateau stop before step {int(args.min_steps_frac * args.steps)}; "
-              f"abort early if bpb > best x {1 + args.degrade_frac:.2f}")
+        # Report each guard by its OWN trigger. The old single line reported a plateau
+        # rule that was switched off while implying a degrade tripwire was active -- and
+        # the degrade rule was inside the same gate, so it was off too. Both are armed
+        # independently now (fix 2026-10-01); print what is actually running.
+        armed = [f"degrade abort if bpb > best x {1 + args.degrade_frac:.2f}"
+                 if args.degrade_frac > 0 else "degrade OFF",
+                 f"plateau stop after {patience_checks} flat checks "
+                 f"({patience_checks * args.val_every} steps)"
+                 if patience_checks > 0 else "plateau OFF",
+                 f"saturation stop if {args.flat_window}-eval envelope flat "
+                 f"{args.flat_frac:.0%} of schedule (> {args.flat_delta} bpb)"
+                 if args.flat_frac > 0 else "saturation OFF"]
+        print(f"  guards: {' | '.join(armed)}; "
+              f"no stop before step {int(args.min_steps_frac * args.steps)}")
 
     # Early-stop ledger: best BITS/BYTE seen, strikes since, stop flag.
     # A resumed run INHERITS this ledger: it used to reset to inf on every resume, so a
     # long run that restarted repeatedly lost its divergence guard each time.
     best_bpb, bad_checks = float("inf"), 0
+    # val_bpb per eval, for the saturation guard's envelope. Rebuilt from the curve on
+    # resume so a restarted run cannot reset its own stall detection.
+    eval_bpb_history: list = []
     recycle_hits = 0  # consecutive recycling tripwire hits (needs 2 past step 100)
     if resume_best_bpb:
         best_bpb, bad_checks = resume_best_bpb, resume_bad_checks
+        eval_bpb_history = list(resume_eval_bpb or [])
         print(f"  early-stop ledger inherited: best_bpb={best_bpb:.4f} "
-              f"strikes={bad_checks}")
+              f"strikes={bad_checks} evals={len(eval_bpb_history)}")
 
     # === METRIC 3: Throughput tracking ===
     import time
@@ -884,39 +1045,94 @@ def _train(args):
                         stop = True
                 else:
                     recycle_hits = 0
-            if patience_checks > 0:
-                if val_bpb < best_bpb - args.min_delta:
-                    # New best: snapshot it, reset strikes.
-                    best_bpb, bad_checks = val_bpb, 0
-                    best_ckpt = os.path.join(
-                        args.out, f"exp002_{tag}_{run_stamp}_best.pt")
-                    saved_best = dict(vars(cfg))
-                    saved_best["use_rope"] = args.use_rope
-                    saved_best["tokenizer"] = args.tokenizer
-                    saved_best["corpus"] = args.corpus or args.data
-                    saved_best["val_bpb"] = val_bpb
-                    saved_best["bytes_per_token"] = bpt
-                    torch.save({"cfg": saved_best, "model": model.state_dict(),
-                                "optimizer": opt.state_dict(),
-                                "step": step, "val": val, "val_bpb": val_bpb,
-                                "best_bpb": val_bpb, "bad_checks": bad_checks,
-                                "run_name": os.path.basename(run_path)},
-                               best_ckpt)
-                    print(f"  new best bpb={val_bpb:.4f} (val={val:.4f}) -> {best_ckpt}")
-                else:
-                    bad_checks += 1
-                    if step < args.min_steps_frac * args.steps:
-                        # Mid-schedule a flat bpb is the LR still being high, not
-                        # convergence -- only a genuine climb is worth stopping for.
-                        if val_bpb > best_bpb * (1.0 + args.degrade_frac):
-                            stop = True
-                            print(f"  abort: bpb {val_bpb:.4f} > best {best_bpb:.4f} "
-                                  f"+{args.degrade_frac:.0%} at step {step} (mid-schedule)")
-                    elif bad_checks >= patience_checks:
+            # GUARD BLOCK. The keeper (_best.pt) is deliberately OUTSIDE every stop-rule
+            # gate: it is a safety artifact, not a reward for arming a stop rule. It used
+            # to live inside `if patience_checks > 0`, so any run launched with
+            # --patience-frac 0 (the full-epoch 70M run, and the chain specs that inherit
+            # it) silently produced NO keeper at all: no *_best.pt, best_bpb=None in the
+            # step checkpoint, and `best bpb=n/a` in the trainer's own exit line. A
+            # 15,136-step run finished with its best score recoverable only by reading the
+            # log. Fix 2026-10-01: keeper always runs; each stop rule arms on its own flag.
+            #
+            # The keeper triggers on the UNBIASED per-round envelope, not a single eval.
+            # One eval is a single phase of a fixed 5-eval cycle (see eval_cycle_length),
+            # so tracking the raw minimum saves whichever checkpoint happened to align
+            # with the easiest window set and reports ~0.0399 bpb below true quality. On
+            # the 70M run that turned a miss at the 1.42 target into an apparent pass.
+            eval_bpb_history.append(val_bpb)
+            round_env, round_period = envelope(eval_bpb_history)
+            # Use the per-round mean WHEN a cycle is detectable and a full round is
+            # available; otherwise fall back to the raw eval.
+            #
+            # The fallback is not a compromise, it is the short-run case: with too few
+            # evals there is no cycle to unwrap (eval_cycle_length needs 2*max_period+2
+            # samples), and returning inf here made the keeper never fire at all --
+            # `best bpb=n/a` on a smoke run, i.e. the exact P0 bug this guard block was
+            # written to fix, reintroduced by my own over-correction. A short run has no
+            # cycle bias to correct, so raw evals are unbiased enough there.
+            if round_period > 1 and len(round_env) >= 1 \
+                    and len(eval_bpb_history) >= round_period:
+                cand_bpb, basis = round_env[-1], "envelope_mean"
+            else:
+                cand_bpb, basis = val_bpb, "raw_eval"
+            if cand_bpb < best_bpb - args.min_delta:
+                # New best: snapshot it, reset strikes.
+                best_bpb, bad_checks = cand_bpb, 0
+                best_ckpt = os.path.join(
+                    args.out, f"exp002_{tag}_{run_stamp}_best.pt")
+                saved_best = dict(vars(cfg))
+                saved_best["use_rope"] = args.use_rope
+                saved_best["tokenizer"] = args.tokenizer
+                saved_best["corpus"] = args.corpus or args.data
+                saved_best["val_bpb"] = val_bpb
+                saved_best["bytes_per_token"] = bpt
+                torch.save({"cfg": saved_best, "model": model.state_dict(),
+                            "optimizer": opt.state_dict(),
+                            "step": step, "val": val, "val_bpb": val_bpb,
+                            "best_bpb": best_bpb,
+                            "best_bpb_basis": basis,
+                            "eval_bpb": list(eval_bpb_history),
+                            "bad_checks": bad_checks,
+                            "run_name": os.path.basename(run_path)},
+                           best_ckpt)
+                print(f"  new best bpb={best_bpb:.4f} (basis {basis}, raw "
+                      f"{val_bpb:.4f} @ step {step}) -> {best_ckpt}")
+            else:
+                bad_checks += 1
+
+            # Guard 1: DEGRADE. Arms on --degrade-frac alone. It never needed patience
+            # (it is a RISE test, not a plateau test); sharing the gate meant a run with
+            # --patience-frac 0 also lost its only overfit/divergence tripwire.
+            if args.degrade_frac > 0:
+                if step < args.min_steps_frac * args.steps:
+                    # Mid-schedule a flat bpb is the LR still being high, not
+                    # convergence -- only a genuine climb is worth stopping for.
+                    if val_bpb > best_bpb * (1.0 + args.degrade_frac):
                         stop = True
-                        print(f"  early stop: bpb flat for {bad_checks} checks "
-                              f"({bad_checks * args.val_every} steps) — "
-                              f"best={best_bpb:.4f} @ step {step}")
+                        print(f"  abort: bpb {val_bpb:.4f} > best {best_bpb:.4f} "
+                              f"+{args.degrade_frac:.0%} at step {step} (mid-schedule)")
+                elif val_bpb > best_bpb * (1.0 + args.degrade_frac):
+                    stop = True
+                    print(f"  abort: bpb {val_bpb:.4f} > best {best_bpb:.4f} "
+                          f"+{args.degrade_frac:.0%} at step {step}")
+            # Guard 2: PLATEAU. Arms on --patience-frac alone (unchanged semantics).
+            if patience_checks > 0 and bad_checks >= patience_checks:
+                stop = True
+                print(f"  early stop: bpb flat for {bad_checks} checks "
+                      f"({bad_checks * args.val_every} steps) — "
+                      f"best={best_bpb:.4f} @ step {step}")
+            # Guard 3: SATURATION / flat envelope. Arms on --flat-frac alone. Covers the
+            # failure the other two structurally cannot: a curve that stops improving
+            # WITHOUT rising. See flat_envelope_stop().
+            if args.flat_frac > 0 and flat_envelope_stop(
+                    eval_bpb_history, args.flat_window, args.flat_delta,
+                    step, args.steps, args.flat_frac, args.val_every,
+                    min_step=args.min_steps_frac * args.steps):
+                stop = True
+                env, _p = envelope(eval_bpb_history)
+                print(f"  flat stop: per-round envelope stalled at bpb={env[-1]:.4f} "
+                      f"for {args.flat_frac:.0%} of the schedule ({_p}-eval cycle x "
+                      f"{args.flat_delta} bpb); best={best_bpb:.4f} @ step {step}")
 
         # METRIC 5: fixed-train probe, only at val cadence (it's a forward pass)
         tval = None
@@ -997,6 +1213,10 @@ def _train(args):
                         # the ledger on resume.
                         "best_bpb": None if best_bpb == float("inf") else best_bpb,
                         "bad_checks": bad_checks,
+                        # Full val history so a resumed run's saturation guard starts
+                        # with its envelope intact instead of re-learning "no progress
+                        # yet" from scratch and therefore never firing.
+                        "eval_bpb": list(eval_bpb_history),
                         "run_name": os.path.basename(run_path)}, ckpt)
             print(f"  saved {ckpt}")
             write_samples(step)
