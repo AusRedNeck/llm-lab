@@ -29,6 +29,8 @@ import torch
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEIGHTS = os.path.join(LAB, "data", "incoming", "pythia70m_weights")
 SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
+CACHE_BIN = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin")
+CACHE_META = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin.meta.json")
 OUT = os.path.join(LAB, "reports", "pythia70m_reference.json")
 
 
@@ -38,22 +40,43 @@ def main():
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--ctx", type=int, default=512)
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--source", choices=["cache", "slice"], default="cache",
+                    help="cache = score the TOKEN CACHE tail directly (correct, and "
+                         "what train.py's split_corpus actually holds); slice = score "
+                         "pile_val_slice.txt, which is a decode->write->re-encode "
+                         "round trip and is NOT token-identical to the cache "
+                         "(1.68% match, diverges at index 42843). Default changed "
+                         "to cache on 2026-10-01; 'slice' reproduces the old, "
+                         "incorrect number for comparison.")
+    ap.add_argument("--val-frac", type=float, default=0.01)
     a = ap.parse_args()
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    tok = AutoTokenizer.from_pretrained(WEIGHTS)
     model = AutoModelForCausalLM.from_pretrained(WEIGHTS, torch_dtype=torch.float32)
     model.to(dev).eval()
 
-    raw = open(SLICE, "rb").read().decode("utf-8", errors="replace")
-    total_bytes = len(raw.encode("utf-8"))
-    print(f"slice: {len(raw):,} chars, {total_bytes:,} bytes, device {dev}")
-
-    ids = tok(raw, return_tensors="pt").input_ids[0]
+    if a.source == "cache":
+        # Score the ids the trainer held out. Read straight from the memmapped cache:
+        # going through decoded text silently changes the token stream and makes the
+        # comparison meaningless (see --source help).
+        import numpy as _np
+        meta = json.load(open(CACHE_META, encoding="utf-8"))
+        total = int(meta["tokens"])
+        cut = int(total * (1.0 - a.val_frac))
+        arr = _np.memmap(CACHE_BIN, dtype="int32", mode="r")
+        ids = torch.from_numpy(_np.asarray(arr[cut:total], dtype=_np.int64))
+        print(f"cache tail: {ids.shape[0]:,} tokens "
+              f"(total {total:,}, val_frac {a.val_frac}) device {dev}")
+    else:
+        tok = AutoTokenizer.from_pretrained(WEIGHTS)
+        raw = open(SLICE, "rb").read().decode("utf-8", errors="replace")
+        print(f"slice: {len(raw):,} chars, {len(raw.encode('utf-8')):,} bytes, "
+              f"device {dev}  <-- LOSSY: re-tokenized text, NOT the cache tail")
+        ids = tok(raw, return_tensors="pt").input_ids[0]
+        print(f"tokenized: {ids.shape[0]:,} tokens (vocab {tok.vocab_size})")
     n = ids.shape[0]
-    print(f"tokenized: {n:,} tokens (vocab {tok.vocab_size})")
     need = a.batches * a.batch * a.ctx
     if n < need:
         print(f"WARNING: only {n:,} tokens for {need:,} needed; reducing batches")
@@ -94,7 +117,13 @@ def main():
     res = {
         "model": "EleutherAI/pythia-70m",
         "weights": WEIGHTS,
-        "slice": SLICE,
+        "source": a.source,
+        "source_note": ("token cache tail (ids identical to train.py split_corpus)"
+                        if a.source == "cache" else
+                        "pile_val_slice.txt - LOSSY decode/encode round trip, NOT "
+                        "token-identical to the cache tail; historical number only"),
+        "val_frac": a.val_frac,
+        "slice": SLICE if a.source == "slice" else CACHE_BIN,
         "seed": a.seed, "batches": a.batches, "batch": a.batch, "ctx": a.ctx,
         "tokens_scored": tot_tok,
         "bytes_per_token_trainer": BPT_TRAINER,
