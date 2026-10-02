@@ -1,0 +1,27 @@
+{
+  "token_matched": {
+    "ours_tokens": 2003992003,
+    "ours_tok_per_param": 28.3,
+    "pythia_revision": "step1000",
+    "pythia_tokens": 2097152000,
+    "token_ratio_pythia_over_ours": 1.046
+  },
+  "ctx512_both": {
+    "ours_bpb": 1.3947,
+    "pythia_bpb": 1.4715,
+    "gap_bpb": -0.0768,
+    "gap_pct": -5.2,
+    "caveat": "pythia scored out-of-distribution at 512 (trained at 2048)"
+  },
+  "pythia_native_2048": {
+    "bpb": 1.4401,
+    "ctx512_penalty_on_pythia": 0.0314,
+    "gap_vs_native": -0.0454,
+    "caveat": "different window size vs ours; bounds the context penalty only"
+  },
+  "asymptote_comparison_superseded": {
+    "pythia_143000_tokens": 299892736000,
+    "gap_pct": 18.7,
+    "why_superseded": "compared 2.004B tokens against 299.9B tokens, a 150x token mismatch presented as a quality gap"
+  }
+}
