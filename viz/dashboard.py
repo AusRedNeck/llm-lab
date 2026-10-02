@@ -112,9 +112,13 @@ def load_runs(runs_dir):
         stop = next((r for r in dense if r.get("early_stop")), None)
         runs.append({
             "name": d.name, "live": live,
-            "params_m": round(header.get("params_m") or 0, 2),
-            "preset": args.get("preset"), "lr": args.get("lr"),
-            "eff": eff, "ctx": ctx_len,
+                        "params_m": round(header.get("params_m") or 0, 2),
+                        "preset": args.get("preset"), "lr": args.get("lr"),
+                        "eff": eff, "ctx": ctx_len,
+                        # Which val slice this run scored against. Two runs are only
+                        # comparable on bpb if this matches -- cross-corpus ranking is
+                        # the mismatched-denominator trap (see a3a3b8b).
+                        "corpus": args.get("corpus"),
             # Coverage denominator (train.py logs it; old runs: None = no epochs).
             "train_tokens": header.get("train_tokens"),
             "corpus_tokens": header.get("corpus_tokens"),
