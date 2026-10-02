@@ -53,7 +53,7 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-02 00:17 from `runs/*/loss.jsonl` + `experiments.json`, git `4f4de4c`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-02 08:22 from `runs/*/loss.jsonl` + `experiments.json`, git `9895446`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
