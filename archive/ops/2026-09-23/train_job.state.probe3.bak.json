@@ -1,0 +1,11 @@
+{
+  "job": "pythia160-probe-3of3-lr1.5e-3",
+  "run_name": "",
+  "status": "stopped-by-rule",
+  "pid": 27848,
+  "checked_at": "2026-09-23T01:21:45",
+  "watchdog_last_step": 1000,
+  "watchdog_last_at": "2026-09-23T00:26:45",
+  "final_step": 1000,
+  "reason": "trainer printed 'done.' in lr_sweep_50k.log"
+}
