@@ -27,6 +27,7 @@ Usage:
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -216,6 +217,22 @@ def build_state():
     return "\n".join(lines)
 
 
+PROVENANCE_RE = re.compile(
+    r"^_?\*?Generated .*?(?:\*|_)?$", re.MULTILINE | re.DOTALL)
+
+
+def strip_provenance(block):
+    """Drop the "Generated <timestamp> ... git <sha>" line.
+
+    That line records WHEN and FROM WHICH COMMIT the block was written, so it
+    can never match the block it is embedded in: committing a regenerated README
+    changes HEAD, which changes the sha the block reports, which makes the next
+    --check fail. The check would be red forever on a correct tree. Everything
+    else in the block is derived from runs/ + experiments.json and IS comparable.
+    """
+    return PROVENANCE_RE.sub("", block).strip()
+
+
 def splice(text, block):
     """Replace what's between the fences. Everything outside stays untouched."""
     if FENCE_BEGIN not in text or FENCE_END not in text:
@@ -235,6 +252,21 @@ def main():
     block = build_state()
     current = README.read_text(encoding="utf-8")
     updated = splice(current, block)
+
+    # Only the substance has to match. See strip_provenance(): the timestamp and
+    # sha are a record of the write, not of the content, and comparing them makes
+    # --check permanently red on a tree whose state block is actually correct.
+    same_substance = (strip_provenance(current) == strip_provenance(updated))
+    if same_substance and updated != current:
+        # Provenance line is older than HEAD. Refresh it if we were asked to
+        # write, but do not call the block stale.
+        if not args.check:
+            README.write_text(updated, encoding="utf-8")
+            print(f"{README.name}: state block current; provenance line refreshed.")
+            return 0
+        print(f"{README.name}: state block already current "
+              f"(provenance line lags HEAD by design).")
+        return 0
 
     if updated == current:
         print(f"{README.name}: state block already current.")
