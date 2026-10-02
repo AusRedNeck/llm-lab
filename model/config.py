@@ -155,18 +155,24 @@ L112M_14L768 = ModelConfig(
 
 # Pythia-160M SHAPE: 12L x 768H x 12 heads x FFN 3072 (64 dims/head).
 # Reference: EleutherAI/pythia-160m (spec + tokenizer in references/pythia-160m/).
-# NOTE: matches the SHAPE for the capacity series (70.65M -> 113.86M -> 162.6M @ 50k),
-# not the NeoX stack: we keep sequential residual, full RoPE, dropout 0.1 (see the
-# reference README for the fidelity deltas). ~162.7M @ 50k vocab untied (real count,
-# ctx 512), 110.3M @ 16k, 85.3M trunk (the axis that actually carries capacity at
-# 50k vocab).
+# PARITY as of the 2026-10-01 plan (.hermes/plans/2026-10-01_guard-fix-and-160m-
+# parity.md): partial RoPE (0.25), parallel residual, no dropout, vocab 50304 --
+# every field now matches the vendored references/pythia-160m/config.json.
+# The header used to claim "sequential residual, full RoPE, dropout 0.1", which
+# the config had already stopped being true of; see that plan for why parity beat
+# keeping the capacity series internally consistent. PYTHIA_12L768 below is
+# deliberately still 0.1 -- do not change both in one pass.
+# Built param count is 162,766,464 (162.77M), NOT the 162,257,664 (162.26M) quoted in
+# that plan. The 508,800 gap is real and structural: HF NeoX is RoPE-only with no
+# learned position table and no lm_head bias, while we carry a 512x768 position table
+# (393,216) plus a 50,304-wide output bias. Quote our measured count, not the plan's.
 PYTHIA160_12L768 = ModelConfig(
-    vocab_size=50256,     # overridden from bpe_owt50k_v2 file at runtime
+    vocab_size=50304,     # pythia-160m config.json; --tokenizer overrides this anyway
     context_length=512,
     embedding_dim=768,
     num_layers=12,
     num_heads=12,
-    dropout=0.1,
+    dropout=0.0,          # Pythia-160M has no dropout key => 0.0
     rotary_pct=0.25,      # Pythia: RoPE on 25% of head dims (config.json)
     use_rope=True,
     parallel_residual=True,
