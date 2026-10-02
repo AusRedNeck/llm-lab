@@ -178,8 +178,21 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
                 print(f"  resume: {chars:,} chars / {tokens:,} tokens already on disk",
                       flush=True)
         if not chars:
+            # No usable sidecar. Start clean rather than inherit a bin whose char
+            # offset we cannot know: the .bin records how many TOKENS it holds,
+            # not chars, and chars-per-token drifts per corpus (4.047 measured on
+            # the Pile), so any guess here silently skips source text.
+            # write_meta is atomic, so a crash cannot land us here -- a hand-deleted
+            # sidecar can. Say so instead of quietly re-reading the wrong offset.
+            stale = os.path.getsize(dst_bin) if os.path.exists(dst_bin) else 0
+            if stale:
+                print(f"  NOTE: {os.path.basename(dst_bin)} holds {stale:,} bytes but has "
+                      f"no usable sidecar -- re-encoding from the start", flush=True)
             open(dst_bin, "wb").close()      # fresh: never inherit old bytes
-        out_mode = "r+b" if chars else "wb"
+        # "r+b" keeps the bytes already on disk; we seek past them before the first
+        # write. Without that seek the pointer sits at 0 and --resume silently
+        # OVERWRITES the prefix. See tests/test_token_io_resume.py.
+        out_mode = "r+b"
 
     # A crashed worker once lost a shard to an unreproducible encoder fault.
     # Now any encode exception bisects the chunk, keeps the data, and files the
@@ -203,6 +216,13 @@ def encode_file_stream(src: str, vocab_path: str, dst_bin: str, *,
         # cache irreproducible from the source (tests/test_corpus_newlines.py).
         if chars:
             f.read(chars)               # text mode: same unit we recorded
+            # Skip the bytes we already wrote, or the first tofile lands on top of
+            # them. "r+b" starts the pointer at 0, so without this resume rewrites
+            # the head of the cache and leaves a torn tail. Measured: a 4,399-char
+            # source resumed at 2,000 came back as 2,399 ids instead of 4,399.
+            # tests/test_token_io_resume.py holds the failing case.
+            if out_mode == "r+b":
+                out.seek(tokens * DTYPE.itemsize)
         while True:
             if limit_chars and chars >= limit_chars:
                 break
