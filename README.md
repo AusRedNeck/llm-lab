@@ -53,7 +53,7 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-02 00:12 from `runs/*/loss.jsonl` + `experiments.json`, git `a3a3b8b`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-02 00:17 from `runs/*/loss.jsonl` + `experiments.json`, git `4f4de4c`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
@@ -93,7 +93,7 @@ None. No curve has moved in the last 60 minutes. GPU is idle.
 
 ### Registry — 27 arms
 
-closed 10 · fail 8 · pass 7 · inconclusive 1 · running 1
+closed 10 · pass 8 · fail 8 · inconclusive 1
 
 Open arms (not `closed`):
 
@@ -113,11 +113,9 @@ Open arms (not `closed`):
 | `pile-eff128k-5k` | pile-batch-knee | **pass** | Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m:... |
 | `pile-full-diet-70m` | pile-full-diet | **fail** | Pythia-70M shape on the FULL 2.0B-token Pile diet, one epoch, to measure the open-weights gap vs EleutherAI... |
 | `pile-full-diet-70m-lr25` | pile-full-diet | **fail** | Same full-diet Pile arm at lr 2.5e-4 (half of 5e-4). The 5e-4 arm reached best bpb 1.9683 @ step 3000 then ... |
-| `pile-pythia-full-epoch` | pile-chinchilla-epoch | **running** | FULL EPOCH over the Pile at Pythia-70M parity: one pass over the 2,003,992,003-token cache = 15,136 steps a... |
+| `pile-pythia-full-epoch` | pile-chinchilla-epoch | **pass** | FULL EPOCH over the Pile at Pythia-70M parity: one pass over the 2,003,992,003-token cache = 15,136 steps a... |
 | `pythia16k-lr-3e-3` | pythia16k-lr-ladder | **pass** | 16k LR ladder rung; winner. |
 | `pythia16k-lr-4e-3` | pythia16k-lr-ladder | **fail** | 16k LR ladder rung (beyond bracket). |
-
-> ⚠️ **Verdict drift.** Marked `running` in `experiments.json`, but nothing is training: `pile-pythia-full-epoch`. Update the registry (`viz/arm.py` / `experiments.json`) — the run finished, this row didn't.
 
 _Full arm history with levers and controls: `experiments.json`, rendered at `viz/training.html`._
 <!-- AUTO:STATE:END -->
