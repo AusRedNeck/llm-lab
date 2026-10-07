@@ -84,10 +84,20 @@ for the parity run.** Full series and caveats:
 it: measured peak **8,982MB of 16,376MB**, so the plan's "EXTRAPOLATED —
 smoke it" question is answered.
 
-Still open before launch: the `viz/arm.py` launch spec for the 24,694-step run,
-the checkpoint retention call (272 files / 200.6GB already), and — optional —
-a 6e-4 rung (~1h45m), since 5e-4 is the best rung *tested* rather than a
-proven optimum (Pythia's raw 160M peak is 6e-4).
+Still open before launch: the `viz/arm.py` launch spec for the 24,694-step run
+and — optional — a 6e-4 rung (~1h45m), since 5e-4 is the best rung *tested*
+rather than a proven optimum (Pythia's raw 160M peak is 6e-4).
+
+**Checkpoint retention decided 2026-10-07 (Shane: "keep the best" + the
+reasons to keep more):** per run keep `_best` + the newest step (crash-resume
+point) + every 5000th (diagnostic trajectory) + **the pythia-matched anchor
+step** + finals, delete the rest. The anchor is the new bit: our step 16,000 is
+pythia-160m@step1000 *to the token* (131,072 × 16,000 = 2,097,152,000) and it
+is not on the 5000 grid, so the old policy would have deleted the checkpoint
+the matched-token headline is measured from. Applied: **98 files / 89.2 GB
+reclaimed** (276 → 178 files, 18/18 keepers verified present), leaving ~130 GB
+and 1.2 TB free on D:. The long run will write ~50 step ckpts ≈ 98 GB and prune
+back to ~14 GB after it finishes.
 
 ### The val fixture moved (2026-10-06) — read before quoting any bpb
 
@@ -228,9 +238,15 @@ validation gradients diverge while training gradients stay bounded.
    annealing phase where 70M improved. Does a longer schedule (or cosine
    restart) let 160M reach that regime?
 2. **LR on the fixed stack**: all three 160M LR probes ran pre-fix. The
-   winning LR may differ on the fixed architecture.
-3. **Checkpoint retention**: 87 files / 35 GB currently; retention policy
-   is Shane's call (prune_checkpoints.py handles the mechanics).
+   winning LR may differ on the fixed architecture. PARTIALLY ANSWERED
+   2026-10-07: on the fixed (parity) stack at Pile scale, 5e-4 beats 3e-4 by
+   0.159 bpb at matched 2000 steps — see `pile-160m-lr-probe`. The high side
+   (6e-4, Pythia's raw peak) is still untested.
+3. **Checkpoint retention**: DECIDED 2026-10-07 — keep best + last + every
+   5000th + the pythia-matched anchor step (step 16,000 of a 131,072-tok/step
+   run) + finals; `prune_checkpoints.py --apply` reclaimed 89.2 GB and keeps
+   keepers manifest-protected. Earlier note: 87 files / 35 GB, policy was
+   Shane's call; mechanics unchanged.
 
 ---
 
