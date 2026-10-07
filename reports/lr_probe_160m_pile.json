@@ -1,0 +1,116 @@
+{
+  "family": "pile-160m-lr-probe",
+  "question": "Which LR for the 160M Pythia-parity Pile run at eff 131,072? Plan 2026-10-01: bracket 5e-4 vs 3e-4, do not assume the 70M winner carries over.",
+  "method": "Two rungs, 2000 steps each (262.1M tokens), identical init (step-1 loss 10.9683 both) and identical data order, same fixture (val tail of pile_train_full_bpe_pythia_hf.bin, bpt 3.8743), same eff batch, warmup 200 then cosine to 10%. Verdict rule set BEFORE rung B finished: compare final 4-eval block means at matched steps; overlap inside the eval noise band = inconclusive.",
+  "rungs": {
+    "5e-4": {
+      "arm": "p160-pile-lr5e-4",
+      "run_dir": "20261006_2126_pythia160_tokenizer_pile_train_full",
+      "steps": 2000,
+      "evals": [
+        2.558,
+        2.2638,
+        2.1227,
+        2.001,
+        1.9415,
+        1.8451,
+        1.7394,
+        1.6638,
+        1.6704,
+        1.6236,
+        1.573,
+        1.5107,
+        1.4792,
+        1.5289,
+        1.5167,
+        1.4885,
+        1.4444,
+        1.4279,
+        1.4883,
+        1.4858
+      ],
+      "block_means_of_4": [
+        2.2364,
+        1.7974,
+        1.5944,
+        1.5033,
+        1.4616
+      ],
+      "best_raw": 1.4279,
+      "best_raw_step": 1800,
+      "final_block_mean": 1.4616,
+      "last6_mean": 1.4753,
+      "last8_mean": 1.4825,
+      "still_descending_at_ceiling": true,
+      "gnorm_max": 1.674,
+      "peak_gpu_mem_mb": 8982
+    },
+    "3e-4": {
+      "arm": "p160-pile-lr3e-4",
+      "run_dir": "20261006_2350_pythia160_tokenizer_pile_train_full",
+      "steps": 2000,
+      "evals": [
+        2.6593,
+        2.3153,
+        2.2159,
+        2.0984,
+        2.0484,
+        1.9688,
+        1.8898,
+        1.8332,
+        1.8504,
+        1.8063,
+        1.7646,
+        1.7016,
+        1.6674,
+        1.7077,
+        1.6816,
+        1.6542,
+        1.6076,
+        1.5876,
+        1.649,
+        1.6375
+      ],
+      "block_means_of_4": [
+        2.3222,
+        1.935,
+        1.7807,
+        1.6777,
+        1.6204
+      ],
+      "best_raw": 1.5876,
+      "best_raw_step": 1800,
+      "final_block_mean": 1.6204,
+      "last6_mean": 1.6363,
+      "last8_mean": 1.6491,
+      "still_descending_at_ceiling": true,
+      "gnorm_max": 1.689,
+      "peak_gpu_mem_mb": null
+    }
+  },
+  "verdict": "5e-4 WINS. Final-block mean 1.4616 vs 1.6204 = 0.159 bpb better, ~10% relative; the gap is 3.1x the eval noise band and every one of the last 8 paired evals favours 5e-4 by 0.152-0.188. 3e-4 -- the linear-batch-scaled Pythia number (6e-4/16 = 3.75e-4) -- is rejected: linear scaling from Pythia's 2,097,152 tok/step to our 131,072 undershoots for this stack, exactly as the 70M run implied (Pythia-70m's 1e-3 scaled = 6.25e-4, we ran 5e-4 and won). SELECT 5e-4 for the 160M parity run.",
+  "head_to_head_at_2000_steps": {
+    "final_block_mean_5e-4": 1.4616,
+    "final_block_mean_3e-4": 1.6204,
+    "delta_5e-4_minus_3e-4": -0.1588,
+    "last8_delta": -0.1666,
+    "paired_deltas_3e-4_minus_5e-4_last8": [
+      0.1881,
+      0.1788,
+      0.1649,
+      0.1657,
+      0.1631,
+      0.1597,
+      0.1607,
+      0.1517
+    ],
+    "eval_noise_median_consecutive_abs_delta": 0.0506,
+    "signal_over_noise": 3.14
+  },
+  "caveats": [
+    "The bracket is OPEN ON THE HIGH SIDE: 5e-4 is the best rung TESTED, not a proven optimum. Pythia's raw peak for this size is 6e-4; a rung C at 6e-4 (~1h45m) would close it.",
+    "Both rungs were still descending at the 2000-step ceiling (block means A 1.5033->1.4616, B 1.6777->1.6204), so these are bracket readings at matched steps, not converged values.",
+    "Quote the block/band, never best_raw: the fixed 5-eval RNG cycle biases any single bpb low.",
+    "The long run's cosine spans 24,694 steps, not 2,000, so the probe brackets peak LR only."
+  ]
+}

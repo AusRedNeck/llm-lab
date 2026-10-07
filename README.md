@@ -107,16 +107,18 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-02 08:22 from `runs/*/loss.jsonl` + `experiments.json`, git `9895446`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-07 02:18 from `runs/*/loss.jsonl` + `experiments.json`, git `52357e1`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
 | Rank | Run | bpb | @ step | Tokens seen | Params |
 |------|-----|-----|--------|-------------|--------|
 | 1 | `20260930_2055_pythia_tokenizer_pile_train_full` ⭐ | **1.4033** | 13400 | 1.76B | 70.7M |
-| 2 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
-| 3 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
-| 4 | `20260929_2159_pythia_tokenizer_pile_train_full` | **2.0132** | 4000 | 66M | 70.7M |
+| 2 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
+| 3 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
+| 4 | `20261006_2350_pythia160_tokenizer_pile_train_full` | **1.5876** | 1800 | 236M | 162.7M |
+| 5 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
+| 6 | `20260929_2159_pythia_tokenizer_pile_train_full` | **2.0132** | 4000 | 66M | 70.7M |
 
 _Slices are separate. `20260930_2055_pythia_tokenizer_pile_train_full` scored against `data/pile_train_full.txt` — do not rank it against a run from another slice._
 
@@ -145,9 +147,9 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 None. No curve has moved in the last 60 minutes. GPU is idle.
 
-### Registry — 27 arms
+### Registry — 29 arms
 
-closed 10 · pass 8 · fail 8 · inconclusive 1
+closed 11 · pass 9 · fail 8 · inconclusive 1
 
 Open arms (not `closed`):
 
@@ -162,6 +164,7 @@ Open arms (not `closed`):
 | `p160-lr-15e-4` | pythia160-lr-probe | **fail** | 160M LR probe rung. |
 | `p160-lr-1e-3` | pythia160-lr-probe | **fail** | 160M LR probe rung. |
 | `p160-lr-5e-4` | pythia160-lr-probe | **pass** | 160M LR probe (1000 steps, eff64). |
+| `p160-pile-lr5e-4` | pile-160m-lr-probe | **pass** | LR bracket for the 160M Pile parity run (plan 2026-10-01: 'a 1-2k probe at 5e-4 vs 3e-4 should bracket it -... |
 | `p50k-lr-15e-4` | pythia50k-70m-lr-probe | **pass** | 50k 70M LR probe; winner of the ladder. |
 | `p50k-lr-3e-3` | pythia50k-70m-lr-probe | **fail** | 50k 70M LR probe rung (bracket test). |
 | `pile-eff128k-5k` | pile-batch-knee | **pass** | Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m:... |

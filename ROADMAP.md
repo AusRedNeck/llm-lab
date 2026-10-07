@@ -73,10 +73,21 @@ tokens — id-level and decode-level verified, `--selftest` green);
 `data/incoming/`; and the shared val fixture moved off the old 2.004B cache
 tail (see below).
 
-Still open before launch: the LR bracket probe (5e-4 vs 3e-4 over 1–2k steps,
-plan says do not assume), the micro-8 × accum-32 VRAM smoke at 160M width,
-the `viz/arm.py` launch spec, and the checkpoint retention call (272 files /
-200.6GB already).
+**Closed 2026-10-06/07 — the LR bracket and the VRAM smoke.** Two rungs at
+2000 steps, identical init and data order, same fixture: **5e-4 final-block
+1.4616 vs 3e-4 1.6204 — 0.159 bpb better, 3.1× the eval noise band**, every
+paired eval in the last 8 favouring 5e-4. 3e-4 (the linear-batch-scaled Pythia
+number, 6e-4/16 = 3.75e-4) is rejected: scaling down Pythia's 2,097,152
+tok/step undershoots this stack, matching the 70M precedent. **5e-4 selected
+for the parity run.** Full series and caveats:
+`reports/lr_probe_160m_pile.json`. The micro-8 × accum-32 VRAM smoke came with
+it: measured peak **8,982MB of 16,376MB**, so the plan's "EXTRAPOLATED —
+smoke it" question is answered.
+
+Still open before launch: the `viz/arm.py` launch spec for the 24,694-step run,
+the checkpoint retention call (272 files / 200.6GB already), and — optional —
+a 6e-4 rung (~1h45m), since 5e-4 is the best rung *tested* rather than a
+proven optimum (Pythia's raw 160M peak is 6e-4).
 
 ### The val fixture moved (2026-10-06) — read before quoting any bpb
 
