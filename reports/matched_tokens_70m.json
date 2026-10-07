@@ -1,4 +1,12 @@
 {
+  "fixture": {
+    "cache": "pile_train_full_bpe_pythia_hf.bin",
+    "cache_path": "D:\\Projects\\llm-lab\\data\\pile_train_full_bpe_pythia_hf.bin",
+    "val_desc": "pile_train_full_bpe_pythia_hf.bin: total 3,236,695,626  train [:, 3,204,328,669]  val [3,204,328,669:,] = 32,366,957 ids",
+    "bytes_per_token": 3.87428,
+    "scored_on": "2026-10-06",
+    "supersedes": "the same comparison on the 2.004B cache tail (20,039,921 ids, bpt 3.9104): that region sits inside the 160M run's training set, so it cannot be the shared fixture any more"
+  },
   "token_matched": {
     "ours_tokens": 2003992003,
     "ours_tok_per_param": 28.3,
@@ -7,16 +15,16 @@
     "token_ratio_pythia_over_ours": 1.046
   },
   "ctx512_both": {
-    "ours_bpb": 1.3947,
-    "pythia_bpb": 1.4715,
-    "gap_bpb": -0.0768,
-    "gap_pct": -5.2,
+    "ours_bpb": 1.4735,
+    "pythia_bpb": 1.568,
+    "gap_bpb": -0.0945,
+    "gap_pct": -6.0,
     "caveat": "pythia scored out-of-distribution at 512 (trained at 2048)"
   },
   "pythia_native_2048": {
-    "bpb": 1.4401,
-    "ctx512_penalty_on_pythia": 0.0314,
-    "gap_vs_native": -0.0454,
+    "bpb": 1.4657,
+    "ctx512_penalty_on_pythia": 0.1023,
+    "gap_vs_native": 0.0079,
     "caveat": "different window size vs ours; bounds the context penalty only"
   },
   "asymptote_comparison_superseded": {

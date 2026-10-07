@@ -62,7 +62,44 @@ The API/UI architecture, routes, constraints, and usage are documented in
 [`VISUAL-OBSERVATORY.md`](VISUAL-OBSERVATORY.md). Verification: project test
 suite **178 passed, 2 skipped**.
 
-Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline; the 160M parity config was identified as next but has not been launched. Before launch, finalize/persist the run config and verify the data/cache, machine readiness, and resource/retention budget. The 66M full-diet plan is a separate older plan, not the immediate next step.
+Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline; the 160M parity config was identified as next but has not been launched.
+
+### Pre-launch status (2026-10-06 evening)
+
+Done and verified: the full 13.1GB Pile text is tokenized on the **real HF
+Pythia encoder** (`data/pile_train_full_bpe_pythia_hf.bin`, 3,236,695,626
+tokens — id-level and decode-level verified, `--selftest` green);
+`pythia-160m` main + `step1000` reference weights are downloaded to
+`data/incoming/`; and the shared val fixture moved off the old 2.004B cache
+tail (see below).
+
+Still open before launch: the LR bracket probe (5e-4 vs 3e-4 over 1–2k steps,
+plan says do not assume), the micro-8 × accum-32 VRAM smoke at 160M width,
+the `viz/arm.py` launch spec, and the checkpoint retention call (272 files /
+200.6GB already).
+
+### The val fixture moved (2026-10-06) — read before quoting any bpb
+
+Every scorer used to hardcode `pile_train_full_bpe_pythia70m.bin`. Its val
+tail (source chars ~8.04–8.11GB) lies **inside** the 160M training set, so it
+cannot be the shared fixture. The fixture is now the last 1% of
+`pile_train_full_bpe_pythia_hf.bin` (`[3204328669:]`, 32,366,957 ids,
+3.8743 bytes/token), resolved by `scripts/val_fixture.py` — which reads
+`train_job.json`'s `--tok_cache` and ignores completed jobs — and gated by
+`scripts/verify_val_slice_identity.py`. Re-scored on that one id set:
+
+| | ctx 512 | native ctx 2048 |
+|---|---|---|
+| ours (70M, 2.004B tok) | **1.4735** | — |
+| pythia-70m @ step1000 (2.097B tok) | 1.5680 | 1.4657 |
+| gap | **−0.0945 (6.0% ahead)** | +0.0079 (0.5%, wash) |
+
+Reference points on the same tail: pythia-70m *final* 1.1836,
+pythia-160m@step1000 1.4614, pythia-160m final 1.0456 (the 160m numbers are
+the baseline our 160M run is measured against). Superseded: the
+1.3947/1.4715 (5.2%) pair — same method, previous fixture; verdict direction
+unchanged. `data/incoming/pile_val_slice.txt` is retired and its meta now says
+so; `extract_val_slice.py` must not be re-run.
 
 ## Viz Layer (completed 2026-09-23)
 

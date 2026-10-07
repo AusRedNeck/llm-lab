@@ -1,32 +1,24 @@
 {
   "checkpoint": "exp002_pythia_tokenizer_202609302055_step13500.pt",
   "checkpoint_step": 13500,
-  "slice": "D:\\Projects\\llm-lab\\data\\incoming\\pile_val_slice.txt",
+  "cache": "D:\\Projects\\llm-lab\\data\\pile_train_full_bpe_pythia_hf.bin",
+  "cache_desc": "pile_train_full_bpe_pythia_hf.bin: total 3,236,695,626  train [:, 3,204,328,669]  val [3,204,328,669:,] = 32,366,957 ids",
   "seed": 1234,
   "batches": 60,
   "batch": 8,
   "ctx": 512,
-  "bytes_per_token_trainer": 3.9104,
+  "bytes_per_token": 3.87428,
   "device": "cuda",
   "val_bpb_from_train_log": null,
   "ours": {
-    "nll_per_token_nats": 4.092819,
-    "bpb": 1.509996,
+    "nll_per_token_nats": 3.816653,
+    "bpb": 1.421236,
     "tokens_scored": 245760
   },
   "reference_rerun": {
-    "nll_per_token_nats": 3.454634,
-    "bpb": 1.274546,
+    "nll_per_token_nats": 3.178569,
+    "bpb": 1.183628,
     "tokens_scored": 245760
   },
-  "reference_stored": 1.272659,
-  "head_to_head_scattered": {
-    "ours_bpb": 1.4492,
-    "pythia70m_bpb": 1.2207,
-    "gap_bpb": 0.2285,
-    "gap_pct": 18.7,
-    "samples_per_trial": 1638400,
-    "trials": 3
-  },
-  "note": "both models scored on the token-cache tail ids, one harness, same seeds"
+  "reference_stored": 1.183628
 }

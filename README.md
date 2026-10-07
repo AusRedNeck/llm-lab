@@ -51,15 +51,30 @@ See **[AUTHORS.md](AUTHORS.md)** for attribution.
 
 | | bpb @ ctx 512 | tokens seen |
 |---|---|---|
-| **Ours** (hand-rolled trainer, 70.7M) | **1.3947** | 2.004B |
-| `pythia-70m` @ step 1000 | 1.4715 | 2.097B |
-| **Gap** | **−0.0768 (5.2% ahead)** | 1.046× our budget |
+| **Ours** (hand-rolled trainer, 70.7M) | **1.4735** | 2.004B |
+| `pythia-70m` @ step 1000 | 1.5680 | 2.097B |
+| **Gap** | **−0.0945 (6.0% ahead)** | 1.046× our budget |
 
-Scored on identical token ids, one harness, same seeds. An earlier figure of
-"+18.7% behind" is **superseded** — it compared our 2.0B tokens against Pythia's
-*final* checkpoint at 299.9B, a 150× token mismatch reported as a quality gap.
-Don't quote it. Reasoning lives in `reports/matched_tokens_70m.json` and commit
-`a3a3b8b`.
+Scored on identical token ids, one harness, same seeds, on the **active val
+fixture**: the last 1% of `data/pile_train_full_bpe_pythia_hf.bin`
+(`[3204328669:]`, 32,366,957 ids, 3.8743 bytes/token). The fixture is resolved
+by `scripts/val_fixture.py` and gated by
+`scripts/verify_val_slice_identity.py` — never named by hand. Reproduce with
+`python scripts/score_matched_tokens.py`.
+
+Two earlier figures are **superseded**, for two different reasons:
+
+- "+18.7% behind" compared our 2.0B tokens against Pythia's *final* checkpoint
+  at 299.9B — a 150× token mismatch reported as a quality gap. Don't quote it.
+- "1.3947 vs 1.4715, 5.2% ahead" was the same method on the previous fixture,
+  the tail of the 2.004B cache. That region now lies **inside** the 160M run's
+  training set, so it cannot be the shared fixture. Same verdict direction,
+  numbers moved with the fixture.
+
+At pythia's native ctx 2048 the gap is **+0.0079 (0.5%)** — a wash inside the
+regional sd (0.066). The 512-vs-512 table is the fair-on-data number (pythia
+trained at 2048); the 2048 rescore bounds how much of the residual is context
+rather than training. Full reasoning: `reports/matched_tokens_70m.json`.
 
 At 28.3 tokens/param we sit deliberately past Chinchilla's 20 — which is why
 the samples contain memorized fragments. Tradeoff made knowingly.

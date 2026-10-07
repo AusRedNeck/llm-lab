@@ -1,6 +1,6 @@
 {
-  "model": "EleutherAI/pythia-70m",
-  "weights": "D:\\Projects\\llm-lab\\data\\incoming\\pythia70m_weights",
+  "model": "EleutherAI/pythia-160m@step1000",
+  "weights": "data/incoming/pythia160m_step1000",
   "source": "cache",
   "source_note": "val tail of the ACTIVE run's token cache; ids identical to train.py split_corpus, bytes-per-token measured on those same ids",
   "cache": "D:\\Projects\\llm-lab\\data\\pile_train_full_bpe_pythia_hf.bin",
@@ -11,8 +11,8 @@
   "ctx": 512,
   "tokens_scored": 245760,
   "bytes_per_token": 3.87428,
-  "nll_per_token_nats": 3.178569,
-  "bpb": 1.183628,
+  "nll_per_token_nats": 3.924455,
+  "bpb": 1.461379,
   "device": "cuda",
   "note": "bpb = nll_nats * log2(e) / bytes_per_token, matching train.py's bpb_factor exactly so this is directly comparable to the training runs' val bpb. Windows are non-overlapping and HF shifts labels internally (do NOT slice inputs yourself)."
 }
