@@ -98,7 +98,12 @@ Honesty caveats baked into the UI:
 - The inference feed covers **HFM-routed calls only** — direct-pinned
   provider traffic bypasses `request_log` (the known burn blind-spot).
 - When the HFM proxy is down the file is still readable; the badge says
-  `FILE` instead of `LIVE` (freshness = newest row within 60s).
+  `FILE` instead of `LIVE` (freshness = newest row within 60s). When data is
+  stale the collector probes HFM `/healthz` once (0.4s) so the footer can
+  distinguish "proxy down" from "up but idle" — healthz can block on provider
+  probes of dead ollama boxes, hence the short timeout.
+- HFM itself is **intentionally offline by standing decision** — the panel
+  reads its historical `request_log`; it is not a reason to run HFM.
 
 The map is a hand-rolled 2D canvas force simulation (no chart lib, no CDN,
 matching the lab's zero-dependency rule): pods per stream, session hubs for

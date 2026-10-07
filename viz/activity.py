@@ -62,7 +62,22 @@ def _degenerate(stream: str, error: Exception) -> dict:
             "events": [], "stats": {}}
 
 
-def collect_inference(path: str | Path | None = None, limit: int = 100) -> dict:
+HFM_HEALTHZ = "http://127.0.0.1:8077/healthz"
+
+
+def _hfm_proxy_status(url: str) -> str:
+    """'up' if HFM answers healthz, else 'down'. url="" skips the probe."""
+    if not url:
+        return "unknown"
+    try:
+        with urllib.request.urlopen(url, timeout=0.4) as resp:
+            return "up" if getattr(resp, "status", 200) == 200 else "down"
+    except Exception:
+        return "down"
+
+
+def collect_inference(path: str | Path | None = None, limit: int = 100,
+                      healthz_url: str | None = None) -> dict:
     path = path or HFM_DB
     try:
         with _ro(path) as con:
@@ -82,8 +97,14 @@ def collect_inference(path: str | Path | None = None, limit: int = 100) -> dict:
             "cached": bool(r[8]), "error": r[9],
         } for r in rows]
         newest_ms = events[0]["ts_epoch_ms"] if events else 0
-        freshness = "LIVE" if (time.time() * 1000 - newest_ms) < FRESH_WINDOW_S * 1000 else "FILE"
-        return {"ok": True, "error": None, "source": str(path), "freshness": freshness,
+        fresh_data = (time.time() * 1000 - newest_ms) < FRESH_WINDOW_S * 1000
+        freshness = "LIVE" if fresh_data else "FILE"
+        # stale data with a healthy proxy means 'idle', not 'down' — probe only
+        # when the data itself can't answer the question
+        proxy = "unknown" if fresh_data else _hfm_proxy_status(
+            HFM_HEALTHZ if healthz_url is None else healthz_url)
+        return {"ok": True, "error": None, "source": str(path),
+                "freshness": freshness, "hfm_status": proxy,
                 "events": events,
                 "stats": {"last_hour_count": last_hour[0], "cost_cents": last_hour[1],
                           "tokens_total": last_hour[2], "errors": last_hour[3] or 0}}

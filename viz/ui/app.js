@@ -379,8 +379,11 @@ const PANEL_DEFS = [
      ["TOKENS", String(s.tokens_total ?? 0), "prompt + completion"],
      ["SPEND", ((s.cost_cents ?? 0) / 100).toFixed(4) + " $", "routed spend"],
      ["ERRORS", String(s.errors ?? 0), "last hour"]],
-   foot: s => s.freshness === "LIVE" ? "Covers HFM-routed calls only."
-     : "HFM proxy down — showing last file state. Covers HFM-routed calls only."},
+   foot: s => s.freshness === "LIVE"
+     ? "Covers HFM-routed calls only."
+     : s.hfm_status === "up"
+       ? "HFM up — no routed calls recently. Covers HFM-routed calls only."
+       : "HFM proxy down — showing last file state. Covers HFM-routed calls only."},
   {key: "tools", eyebrow: "TOOL CALLS", title: "Agent tools",
    cols: ["TIME", "TOOL", "KIND", "SESSION"],
    row: e => [hhmm(e.iso || e.timestamp), e.tool_name || "—", e.kind,
@@ -457,7 +460,7 @@ function renderStream(def, s) {
   });
   const n = $(key + "-notice");
   n.classList.remove("error");
-  n.textContent = def.foot ? def.foot(s.stats || {}) : "";
+  n.textContent = def.foot ? def.foot(s) : "";
 }
 
 function highlightRow(key) {

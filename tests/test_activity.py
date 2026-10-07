@@ -97,6 +97,7 @@ def test_inference_collector_parses_rows_and_stats(tmp_path):
     assert stats["tokens_total"] == 100 + 50 + 90 + 40 + 10 + 5
     assert stats["errors"] == 1
     assert payload["freshness"] == "LIVE"
+    assert payload["hfm_status"] == "unknown"  # fresh data answers without a probe
 
 
 def test_inference_collector_missing_file_degrades(tmp_path):
@@ -112,9 +113,13 @@ def test_inference_old_data_reports_file_freshness(tmp_path):
     con.execute("UPDATE request_log SET ts = ?", (int((time.time() - 7200) * 1000),))
     con.commit()
     con.close()
-    payload = collect_inference(path=path)
+    payload = collect_inference(path=path, healthz_url="http://127.0.0.1:1")
     assert payload["ok"] is True
     assert payload["freshness"] == "FILE"
+    assert payload["hfm_status"] == "down"  # stale data + dead healthz = proxy down
+
+    skipped = collect_inference(path=path, healthz_url="")
+    assert skipped["hfm_status"] == "unknown"
 
 
 # ---------------------------------------------------------------- tool calls
