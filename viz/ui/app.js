@@ -455,3 +455,153 @@ async function loadActivity() {
 }
 window.setInterval(() => { if(viewName === "activity") loadActivity(); }, 5000);
 
+/* ---------------- Neural map canvas ---------------- */
+let mapState = null, mapAnim = null, mapMouse = null;
+
+function mapLayout(map) {
+  const canvas = $("activity-map");
+  const box = canvas.getBoundingClientRect();
+  if(!box.width || !box.height) return null;          // view hidden — rebuild next tick
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(box.width * dpr);
+  canvas.height = Math.round(box.height * dpr);
+  const prev = new Map((mapState ? mapState.nodes : []).map(n => [n.id, n]));
+  const pods = (map.nodes || []).filter(n => n.kind === "pod");
+  const podX = {};                                     // pods spread across the width
+  pods.forEach((p, i) => { podX[p.id] = box.width * ((i + 1) / (pods.length + 1)); });
+  const nodes = (map.nodes || []).map(raw => {
+    const old = prev.get(raw.id);
+    const isPod = raw.kind === "pod";
+    const px = podX[raw.id] ?? (podX["pod:" + raw.stream] ?? box.width / 2);
+    const x = old ? old.x : px + (Math.random() - 0.5) * 60;
+    const y = old ? old.y : isPod ? 46 : 120 + Math.random() * (box.height - 180);
+    return {...raw, x, y, vx: old ? old.vx : 0, vy: old ? old.vy : 0,
+            r: isPod ? 17 : raw.kind === "session" ? 10 : 4.5 + Math.min(3, (raw.detail?.recall_count || 0) / 4),
+            px};
+  });
+  const ids = new Set(nodes.map(n => n.id));
+  const links = (map.links || []).filter(l => ids.has(l.source) && ids.has(l.target));
+  return {canvas, ctx: canvas.getContext("2d"), w: box.width, h: box.height, dpr,
+          nodes, links, byId: new Map(nodes.map(n => [n.id, n])), hover: null, selected: null};
+}
+
+function mapStep(st) {
+  const nodes = st.nodes;
+  for(let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for(let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy || 1;
+      if(d2 > 26000) continue;                        // far pairs barely interact
+      const f = 900 / d2, d = Math.sqrt(d2);
+      dx /= d; dy /= d;
+      a.vx -= dx * f; a.vy -= dy * f;
+      b.vx += dx * f; b.vy += dy * f;
+    }
+  }
+  st.links.forEach(l => {
+    const a = st.byId.get(l.source), b = st.byId.get(l.target);
+    if(!a || !b) return;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f = (d - 84) * 0.006;
+    a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+    b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+  });
+  nodes.forEach(n => {                                 // pods anchored, everyone drifts
+    n.vx += (n.px - n.x) * (n.kind === "pod" ? 0.05 : 0.006);
+    n.vy += ((n.kind === "pod" ? 46 : n.kind === "session" ? 110 : n.vy0 ?? 160) - n.y) * 0.002;
+    n.vx *= 0.86; n.vy *= 0.86;
+    n.x = Math.max(14, Math.min(st.w - 14, n.x + n.vx));
+    n.y = Math.max(14, Math.min(st.h - 14, n.y + n.vy));
+  });
+}
+
+function mapPaint(st) {
+  const {ctx, w, h, dpr} = st;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  st.links.forEach(l => {
+    const a = st.byId.get(l.source), b = st.byId.get(l.target);
+    if(!a || !b) return;
+    ctx.strokeStyle = streamColor[b.stream] + "33";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  });
+  st.nodes.forEach(n => {
+    const color = streamColor[n.stream] || "#a29eb0";
+    const isHover = st.hover === n, isSelected = st.selected === n;
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r + (isSelected ? 3 : 0), 0, Math.PI * 2);
+    ctx.fillStyle = n.kind === "event" ? color + "cc" : color + "22";
+    ctx.fill();
+    ctx.lineWidth = n.kind === "event" ? 1 : 1.5;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    if(isHover || n.kind !== "event") {
+      ctx.fillStyle = isHover ? "#efeef5" : "#c9c4d6";
+      ctx.font = n.kind === "pod" ? "600 11px ui-sans-serif" : "10px ui-sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(String(n.label || n.id).slice(0, 26), n.x, n.y - n.r - 6);
+    }
+  });
+}
+
+function mapFrame() {
+  if(viewName !== "activity" || !mapState) { mapAnim = null; return; }
+  mapStep(mapState);
+  mapPaint(mapState);
+  mapAnim = window.requestAnimationFrame(mapFrame);
+}
+
+function mapEventAt(ev) {
+  if(!mapState) return null;
+  const box = mapState.canvas.getBoundingClientRect();
+  const x = ev.clientX - box.left, y = ev.clientY - box.top;
+  let best = null, bestD = 144;
+  mapState.nodes.forEach(n => {
+    const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if(d < bestD) { bestD = d; best = n; }
+  });
+  return best;
+}
+
+function mapInspect(node) {
+  const box = $("map-inspector");
+  box.replaceChildren();
+  const eye = document.createElement("p"); eye.className = "eyebrow";
+  eye.textContent = (node.kind + " · " + node.stream).toUpperCase();
+  box.append(eye);
+  const title = document.createElement("p"); title.className = "subhead small";
+  title.textContent = String(node.label || node.id);
+  box.append(title);
+  const detail = node.detail || {};
+  Object.entries(detail).slice(0, 10).forEach(([k, v]) => {
+    const kv = document.createElement("div"); kv.className = "kv";
+    const key = document.createElement("b"); key.textContent = k;
+    const val = document.createElement("span");
+    val.textContent = typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+    kv.append(key, val); box.append(kv);
+  });
+  if(node.row_key) highlightRow(node.row_key);
+}
+
+function drawMap(map) {
+  mapState = mapLayout(map);
+  if(!mapState) return;
+  if(!mapAnim) mapAnim = window.requestAnimationFrame(mapFrame);
+}
+$("activity-map").addEventListener("mousemove", ev => {
+  const node = mapEventAt(ev);
+  const key = node ? node.id : null;
+  if(mapState) mapState.hover = node;
+  ev.currentTarget.style.cursor = node ? "pointer" : "crosshair";
+  if(key && mapState && mapState.hoverId !== key) mapState.hoverId = key;
+});
+$("activity-map").addEventListener("mouseleave", () => { if(mapState) mapState.hover = null; });
+$("activity-map").addEventListener("click", ev => {
+  const node = mapEventAt(ev);
+  if(!node) return;
+  if(mapState) mapState.selected = node;
+  mapInspect(node);
+});
+
