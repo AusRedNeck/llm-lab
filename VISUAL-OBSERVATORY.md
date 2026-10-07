@@ -59,16 +59,55 @@ All endpoints are on the local server. JSON POST bodies use
 | GET | `/api/generations/<id>?after=0` | Fetch output/events after an event index |
 | POST | `/api/trace` | Inspect a prompt on the loaded model |
 | POST | `/api/compare` | Compare checkpoints |
+| GET | `/api/activity` | Inference, tool-call, and memory-access streams + map nodes |
 
 POST routes are limited to the listed inference actions; other write methods and
 unknown POST routes are rejected. Request bodies are capped at 16 KiB. Errors
 use HTTP 400 for invalid input, 404 for missing resources, 409 for unavailable
 or conflicting inference state, and 500 for unexpected failures.
 
+## Activity workspace
+
+The third rail view ("Activity") answers *what is the agent doing right now* —
+one neural-map canvas plus three feed panels:
+
+- **Inference** — model calls from the HFM routing proxy (`request_log`).
+- **Tool calls** — invocation/result pairs from Hermes `state.db`
+  (`messages` joined to `sessions` for profile/session titles).
+- **Memory access** — recent and most-recalled Mnemosyne memories, plus
+  consolidation and graph stats.
+
+All three are **read-only SQLite sources** with independent degradation: a
+missing or locked DB marks its own stream `OFFLINE` and never fails the
+payload (`GET /api/activity` always returns 200 with per-stream `ok` flags).
+Sources are machine-local and overridable by env: `HFM_DB`,
+`HERMES_STATE_DB`, `MNEMOSYNE_DB`.
+
+Honesty caveats baked into the UI:
+
+- The inference feed covers **HFM-routed calls only** — direct-pinned
+  provider traffic bypasses `request_log` (the known burn blind-spot).
+- When the HFM proxy is down the file is still readable; the badge says
+  `FILE` instead of `LIVE` (freshness = newest row within 60s).
+
+The map is a hand-rolled 2D canvas force simulation (no chart lib, no CDN,
+matching the lab's zero-dependency rule): pods per stream, session hubs for
+tool events, event nodes colored lime/orange/cyan; clicking a node fills the
+inspector and scroll-highlights its feed row. The animation pauses when the
+view is hidden; the server caches the payload for 10s (state.db is written
+constantly, so a mtime-signature cache would rebuild on every poll).
+
+**Extension point (Phase 2):** to add a stream — cron runs, kanban, mesh
+DMs — write a collector in `viz/activity.py` returning the same
+degraded-safe shape (`{ok, error, events, stats}`), add it to
+`collect_activity()` and `_build_map()`, then add one panel + renderer. The
+per-source degradation and the map wiring both come for free.
+
 ## Architecture and constraints
 
 - `viz/server.py` serves the static UI and JSON API using the Python standard
-  library. `viz/ui/` contains the browser client.
+  library. `viz/ui/` contains the browser client. `viz/activity.py` holds the
+  three activity-stream collectors behind `GET /api/activity`.
 - `viz/inference_service.py` owns checkpoint loading, device selection,
   generation, tracing and comparison; `viz/trace.py` formats trace results.
 - `model/transformer.py` and `model/block.py` expose optional captured
@@ -89,6 +128,7 @@ Run the suite from the project environment:
 python -m pytest -q
 ```
 
-The API and inference paths have focused tests in `tests/test_viz_server.py`,
+The API and inference paths have focused tests in `tests/test_activity.py`
+(activity collectors, map assembly, degradation), `tests/test_viz_server.py`,
 `tests/test_inference_service.py`, `tests/test_inference_tokenizer.py`, and
 `tests/test_trace.py`.
