@@ -32,7 +32,7 @@ class TransformerBlock(nn.Module):
             nn.Linear(embedding_dim * 4, embedding_dim),
         )
 
-    def forward(self, x, return_weights: bool = False):
+    def forward(self, x, return_weights: bool = False, return_capture: bool = False):
         # Branches are dropout-gated, then summed into x.
         # parallel_residual=True  -> GPT-NeoX/Pythia (use_parallel_residual):
         #   both branches see the SAME pre-norm'd input, giving independent
@@ -48,9 +48,22 @@ class TransformerBlock(nn.Module):
         # capture tuple. The attention module already applies weight dropout.
         attn_out = self.attn_drop(attn_out)
         ffn_in = x if self.parallel_residual else x + attn_out
-        ff_out = self.ffn_drop(self.feed_forward(self.norm2(ffn_in)))
+        if return_capture:
+            ffn_activation = self.feed_forward[1](self.feed_forward[0](self.norm2(ffn_in)))
+            ff_out = self.ffn_drop(self.feed_forward[2](ffn_activation))
+        else:
+            ffn_activation = None
+            ff_out = self.ffn_drop(self.feed_forward(self.norm2(ffn_in)))
         output = x + attn_out + ff_out  # Pythia-style: no post-sum norm
 
+        if return_capture:
+            capture = {
+                "hidden": output.detach(),
+                "attention_delta": attn_out.detach(),
+                "ffn_delta": ff_out.detach(),
+                "ffn_activation": ffn_activation.detach(),
+            }
+            return output, (attn_weights if return_weights else None), capture
         if return_weights:
             return output, attn_weights
         return output

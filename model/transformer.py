@@ -124,13 +124,15 @@ class Transformer(nn.Module):
         """
         import torch.nn.functional as F
 
-        captures = {"layer_hiddens": [], "layer_attention": []}
+        captures = {"layer_hiddens": [], "layer_attention": [], "layer_details": []}
         x = self.emb_drop(self.embedding(tokens))
         captures["embeddings"] = x.detach()
         for block in self.blocks:
-            x, weights = block(x, return_weights=True)
+            x, weights, details = block(x, return_weights=True, return_capture=True)
             captures["layer_hiddens"].append(x.detach())
             captures["layer_attention"].append(weights.detach())
+            captures["layer_details"].append(details)
+
         x = self.norm(x)
         logits = self.lm_head(x)
         captures["logits"] = logits.detach()

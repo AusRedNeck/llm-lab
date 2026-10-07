@@ -74,7 +74,7 @@ def main():
 
     # BPE ckpt in, BPE text out. Bytes ckpts behave exactly as before.
     tok_path = args.tokenizer or c.get("tokenizer")
-    tok = BPETokenizer.load(tok_path) if tok_path else None
+    tok = load_tokenizer(tok_path) if tok_path else None
     if tok is not None:
         ids = tok.encode(args.prompt)
     else:
@@ -96,6 +96,13 @@ def main():
     else:
         text = bytes(b % 256 for b in out).decode("utf-8", errors="replace")
     print(text)
+
+
+def load_tokenizer(tok_path: str):
+    """Use the training pipeline's HF/legacy tokenizer dispatch."""
+    from train.train import load_tokenizer as load_training_tokenizer
+
+    return load_training_tokenizer(tok_path)
 
 
 if __name__ == "__main__":

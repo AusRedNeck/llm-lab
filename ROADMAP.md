@@ -52,6 +52,18 @@ neither 160M arm got there before the guard aborted.
 
 ---
 
+## Visual Observatory + inference (implemented; verification 2026-10-06)
+
+The local browser Observatory now extends the run/arm decision board with
+checkpoint loading, generation, layer/token tracing, captured attention/FFN
+signals, and checkpoint comparison. It is served by `python -m viz.server` on
+loopback; it is an unauthenticated local tool and must not be exposed externally.
+The API/UI architecture, routes, constraints, and usage are documented in
+[`VISUAL-OBSERVATORY.md`](VISUAL-OBSERVATORY.md). Verification: project test
+suite **178 passed, 2 skipped**.
+
+Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline; the 160M parity config was identified as next but has not been launched. Before launch, finalize/persist the run config and verify the data/cache, machine readiness, and resource/retention budget. The 66M full-diet plan is a separate older plan, not the immediate next step.
+
 ## Viz Layer (completed 2026-09-23)
 
 The viz layer answers three questions *while a run is live*:

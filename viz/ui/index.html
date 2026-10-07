@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Observatory</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail">
+      <div class="brand"><span class="brand-mark">λ</span><span>LLM LAB<small>OBSERVATORY</small></span></div>
+      <div class="rail-label">WORKSPACES</div>
+      <button class="nav active" data-view="training"><span>◫</span> Training <i>LIVE</i></button>
+      <button class="nav" data-view="think"><span>◉</span> Think <i>READY</i></button>
+      <div class="rail-footer"><span class="pulse"></span> LOCAL MACHINE<br><small>offline-capable · private</small></div>
+    </aside>
+    <main>
+      <header class="topbar"><div><span class="crumb">LLM LAB</span><b>/</b><span id="crumb-view">TRAINING</span></div><div class="top-status"><span class="pulse"></span><span id="connection">CONNECTING</span><span class="divider"></span><span>REFRESH 5s</span></div></header>
+      <section id="training-view" class="view">
+        <div class="page-head"><div><p class="eyebrow">OBSERVABILITY / RUNS</p><h1>Training desk</h1><p class="subhead">See whether a run is learning, drifting, or just burning tokens.</p></div><div class="updated">UPDATED <b id="updated-at">—</b></div></div>
+        <div id="stats" class="stats"></div>
+        <div class="runbar panel"><div><p class="eyebrow">SELECTED RUN</p><h2 id="run-title">Waiting for run data</h2></div><select id="run-select" aria-label="Select training run"></select><span id="run-badge" class="badge">NO RUN</span></div>
+        <div id="run-health" class="stats compact-stats" aria-live="polite"></div>
+        <section class="panel compare-panel"><div class="panel-head"><div><p class="eyebrow">COMPARISON</p><h2>Run-to-run readout</h2></div><button id="compare-runs" class="action secondary">COMPARE</button></div><div class="control-row"><label class="field grow">RUN A<select id="compare-a"></select></label><label class="field grow">RUN B<select id="compare-b"></select></label></div><p id="compare-note" class="notice">Choose two runs. BPB differences are only meaningful with matching corpus, tokenizer, and validation fraction; confirm the held-out slice matches too.</p><div id="compare-results" class="table-wrap"></div></section>
+        <div class="charts">
+          <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">LEARNING</p><h2>Loss in bits / byte</h2></div><span class="chart-key"><b class="lime"></b> train avg <b class="orange"></b> validation</span></div><canvas id="loss-chart" aria-label="Training and validation loss chart"></canvas></article>
+          <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">STABILITY</p><h2>Gradient &amp; activations</h2></div><span class="chart-key">grad · logit · entropy</span></div><canvas id="stability-chart" aria-label="Training stability chart"></canvas></article>
+          <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">DATA PIPELINE</p><h2>Served vs random-train</h2></div><span class="chart-key">loader health</span></div><canvas id="loader-chart" aria-label="Loader health chart"></canvas></article>
+          <article class="panel runs-card"><div class="panel-head"><div><p class="eyebrow">EXPERIMENT REGISTRY</p><h2>Arms &amp; verdicts</h2></div><span id="problem-count" class="badge">0 CHECKS</span></div><div id="arms-table" class="table-wrap"></div></article>
+        </div>
+        <p id="notice" class="notice" role="status">Reading local run logs…</p>
+      </section>
+      <section id="think-view" class="view hidden">
+        <div class="page-head"><div><p class="eyebrow">INFERENCE / INSPECTION</p><h1>Think workbench</h1><p class="subhead">Start with our Pythia-70M run vs EleutherAI step1000; same prompt, compare the next-token choices.</p></div><div class="badge" id="model-badge">NO MODEL LOADED</div></div>
+        <div class="think-layout">
+          <section class="panel think-main">
+            <div class="panel-head"><div><p class="eyebrow">CHECKPOINT</p><h2>Choose a local model</h2></div><button id="load-model" class="action">LOAD MODEL</button></div>
+            <div class="control-row"><label class="field grow">CHECKPOINT<select id="checkpoint-select"><option>Scanning project checkpoints…</option></select></label><label class="field">DEVICE<select id="device-select"><option value="cpu">CPU</option><option value="cuda" disabled>CUDA · checking</option></select></label><button id="unload-model" class="action secondary" disabled>UNLOAD</button></div>
+            <p id="model-status" class="notice" role="status">Pick a trusted local .pt checkpoint. CUDA loads reserve the training lock until you unload.</p>
+            <label class="field prompt-field">PROMPT<textarea id="prompt-input" rows="3" maxlength="4000">Once upon a time</textarea></label>
+            <div class="control-row settings"><label class="field">NEW TOKENS<input id="max-tokens" type="number" min="1" max="128" value="32"></label><label class="field">TEMPERATURE<input id="temperature" type="number" min="0" max="2" step="0.1" value="0.8"></label><label class="field">TOP-K<input id="top-k" type="number" min="0" max="1000" value="40"></label><label class="field">SEED<input id="seed" type="number" min="0" value="0"></label><button id="generate-button" class="action generate" disabled>GENERATE</button></div>
+            <p id="think-notice" class="notice" role="status">Fast inference is ready when a model is loaded.</p>
+            <div class="generation-output"><div class="panel-head"><div><p class="eyebrow">GENERATED TEXT</p><h2 id="generation-state">Waiting</h2></div><span id="token-count" class="badge">0 TOKENS</span></div><pre id="generated-text">Your model's output will appear here.</pre></div>
+          </section>
+          <aside class="panel token-panel"><div class="panel-head"><div><p class="eyebrow">SAMPLING TRACE</p><h2>Token by token</h2></div><span class="badge">TOP 5</span></div><p class="subhead small">Probability and entropy describe the model's output distribution; they are not a readout of semantic thoughts.</p><div id="token-events" class="token-events"><div class="empty-trace">Generate a short sample to inspect each choice.</div></div></aside>
+        </div>
+        <section class="panel trace-panel">
+          <div class="panel-head"><div><p class="eyebrow">OPT-IN COMPUTATION TRACE</p><h2>Prompt pathways</h2></div><button id="inspect-trace" class="action secondary" disabled>INSPECT PROMPT</button></div>
+          <div class="control-row trace-controls"><label class="field">TOKEN POSITION<select id="trace-token" disabled></select></label><label class="field">LAYER<select id="trace-layer" disabled></select></label><label class="field">HEAD<select id="trace-head" disabled></select></label></div>
+          <p id="trace-note" class="notice">Loads only on demand; attention weights are routing measurements, not causal explanations.</p>
+          <div class="trace-views"><article><p class="eyebrow">ATTENTION TO CONTEXT</p><div id="attention-bars" class="attention-bars"><span class="empty-trace">Choose a loaded model and inspect a prompt.</span></div></article><article><p class="eyebrow">LAYER SIGNALS AT SELECTED TOKEN</p><div id="pathway-layers" class="pathway-layers"></div></article></div>
+        </section>
+        <section class="panel compare-panel"><div class="panel-head"><div><p class="eyebrow">CHECKPOINT REPLAY</p><h2>Same prompt, two checkpoints</h2></div><button id="compare-checkpoints" class="action secondary" disabled>COMPARE MODELS</button></div><div class="control-row"><label class="field grow">MODEL A<select id="compare-model-a"></select></label><label class="field grow">MODEL B<select id="compare-model-b"></select></label></div><p id="checkpoint-compare-note" class="notice">CPU-only sequential comparison; tokenizer alignment is checked before comparing predictions.</p><div id="checkpoint-compare-result" class="model-comparison"></div></section>
+      </section>
+      <footer>LLM LAB <span>·</span> local measurements, no mystery meat telemetry</footer>
+    </main>
+  </div>
+</body>
+</html>

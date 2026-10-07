@@ -119,6 +119,8 @@ def load_runs(runs_dir):
                         # comparable on bpb if this matches -- cross-corpus ranking is
                         # the mismatched-denominator trap (see a3a3b8b).
                         "corpus": args.get("corpus"),
+            "tokenizer": args.get("tokenizer"),
+            "val_frac": args.get("val_frac"),
             # Coverage denominator (train.py logs it; old runs: None = no epochs).
             "train_tokens": header.get("train_tokens"),
             "corpus_tokens": header.get("corpus_tokens"),

@@ -105,3 +105,14 @@ def test_noise_band_ignores_nulls():
     vals = [1.70, None, 1.72, None, 1.71]
     band = noise_band(vals)
     assert band["n"] == 2
+
+
+def test_run_summary_carries_comparability_metadata(tmp_path):
+    _write_run(tmp_path, "run_cmp", header_extra={"args": {
+        "preset": "small", "batch": 2, "accum": 1,
+        "corpus": "pile", "tokenizer": "tokenizer.json", "val_frac": 0.05
+    }}, rows=[{"step": 10, "train": 2.0, "avg50": 2.1}])
+    run = load_runs(str(tmp_path))[0]
+    assert run["corpus"] == "pile"
+    assert run["tokenizer"] == "tokenizer.json"
+    assert run["val_frac"] == 0.05
