@@ -169,10 +169,16 @@ def _build_map(streams: dict) -> dict:
         hubs: dict[str, str] = {}
         for e in events:
             node_id = f"{name}:{e.get('id', e.get('ts_epoch_ms', e.get('id', '')))}:{e.get('timestamp', e.get('ts', ''))}"
+            if name == "inference":
+                row_key = f"inference:{e.get('ts_epoch_ms', '')}"
+            elif name == "tools":
+                row_key = f"tools:{e.get('id', '')}"
+            else:
+                row_key = f"memory:{e.get('tier', '')}:{e.get('id', '')}"
             nodes.append({"id": node_id, "kind": "event", "stream": name,
                           "label": e.get("tool_name") or e.get("model")
                           or e.get("preview", "")[:40] or name,
-                          "detail": e})
+                          "row_key": row_key, "detail": e})
             if name == "tools" and e.get("session_id"):
                 hub_id = f"session:{e['session_id']}"
                 if hub_id not in hubs:

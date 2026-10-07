@@ -38,6 +38,12 @@ def test_default_shell_has_two_workspaces():
     assert 'id="attention-bars"' in html
     assert 'id="compare-checkpoints"' in html
     assert 'id="compare-model-a"' in html
+    assert "Activity" in html
+    assert 'id="activity-view"' in html
+    assert 'id="activity-map"' in html
+    assert 'id="inference-panel"' in html
+    assert 'id="tools-panel"' in html
+    assert 'id="memory-panel"' in html
 
 
 def test_dashboard_payload_reuses_run_and_arm_summaries(tmp_path):
@@ -201,6 +207,50 @@ def test_model_routes_use_service_without_exposing_checkpoint_paths(tmp_path):
         generate = Request(base + "/api/generations", data=b"{}", headers={"Content-Type":"application/json"}, method="POST")
         task = json.loads(urlopen(generate).read())
         assert json.loads(urlopen(base + "/api/generations/" + task["id"]).read())["status"] == "completed"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_activity_api_serves_streams_and_degrades(tmp_path):
+    from tests.test_activity import _make_hfm_db, _make_mnemo_db, _make_state_db
+
+    runs, exp = _fixtures(tmp_path)
+    server = create_server(port=0, runs_dir=runs, experiments_file=exp,
+                           hfm_db=_make_hfm_db(tmp_path),
+                           state_db=_make_state_db(tmp_path),
+                           mnemo_db=_make_mnemo_db(tmp_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        payload = json.loads(urlopen(base + "/api/activity").read())
+        for key in ("inference", "tools", "memory", "map", "updated_at"):
+            assert key in payload
+        assert payload["inference"]["ok"] is True
+        assert payload["tools"]["ok"] is True
+        assert payload["memory"]["ok"] is True
+        pods = [n["id"] for n in payload["map"]["nodes"] if n["kind"] == "pod"]
+        assert pods == ["pod:inference", "pod:tools", "pod:memory"]
+        # a dead source must not 500 — it degrades its own stream
+        server2 = create_server(port=0, runs_dir=runs, experiments_file=exp,
+                                state_db=tmp_path / "missing.db",
+                                hfm_db=tmp_path / "missing2.db",
+                                mnemo_db=tmp_path / "missing3.db")
+        thread2 = threading.Thread(target=server2.serve_forever, daemon=True)
+        thread2.start()
+        try:
+            degraded = json.loads(urlopen(
+                f"http://127.0.0.1:{server2.server_port}/api/activity").read())
+            assert degraded["inference"]["ok"] is False
+            assert degraded["tools"]["ok"] is False
+            assert degraded["memory"]["ok"] is False
+            assert degraded["map"]["nodes"] == []
+        finally:
+            server2.shutdown()
+            server2.server_close()
+            thread2.join(timeout=2)
     finally:
         server.shutdown()
         server.server_close()

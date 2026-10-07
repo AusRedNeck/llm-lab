@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from viz.activity import STATE_DB, HFM_DB, MNEMO_DB, collect_activity
 from viz.dashboard import LIVE_WINDOW_S, build_arms, load_runs
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,34 @@ class DashboardStore:
             return self._payload
 
 
+class ActivityStore:
+    """TTL cache over the three activity streams.
+
+    TTL only, no mtime signature: state.db is written constantly by the
+    gateway, so an mtime check would rebuild on every poll. Collect costs
+    ~44ms measured; a 10s TTL keeps the UI's 5s poll cheap.
+    """
+
+    def __init__(self, state_db=None, hfm_db=None, mnemo_db=None, ttl_s=10):
+        self.state_db = state_db or STATE_DB
+        self.hfm_db = hfm_db or HFM_DB
+        self.mnemo_db = mnemo_db or MNEMO_DB
+        self.ttl_s = ttl_s
+        self._lock = threading.Lock()
+        self._payload = None
+        self._built_at = 0.0
+
+    def get(self):
+        with self._lock:
+            now = time.time()
+            if self._payload is None or now - self._built_at > self.ttl_s:
+                self._payload = collect_activity(hfm_path=self.hfm_db,
+                                                 state_path=self.state_db,
+                                                 mnemo_path=self.mnemo_db)
+                self._built_at = now
+            return self._payload
+
+
 def dashboard_summary(payload):
     """Compact index; rows and generated samples are fetched only for one run."""
     run_keys = ("name", "live", "params_m", "preset", "eff", "ctx", "corpus",
@@ -94,12 +123,14 @@ def dashboard_summary(payload):
 
 
 def create_server(host="127.0.0.1", port=8787, *, runs_dir=None,
-                  experiments_file=None, ui_dir=None, inference_service=None):
+                  experiments_file=None, ui_dir=None, inference_service=None,
+                  state_db=None, hfm_db=None, mnemo_db=None):
     """Create, but do not start, a local dashboard server (use port=0 in tests)."""
     runs_dir = Path(runs_dir or LAB_ROOT / "runs").resolve()
     experiments_file = Path(experiments_file or LAB_ROOT / "experiments.json").resolve()
     ui_dir = Path(ui_dir or Path(__file__).with_name("ui")).resolve()
     store = DashboardStore(runs_dir, experiments_file)
+    activity_store = ActivityStore(state_db=state_db, hfm_db=hfm_db, mnemo_db=mnemo_db)
     if inference_service is None:
         from viz.inference_service import InferenceService
         inference_service = InferenceService(project_root=LAB_ROOT,
@@ -201,6 +232,13 @@ def create_server(host="127.0.0.1", port=8787, *, runs_dir=None,
                     self._send(404, '{"error":"run not found"}', "application/json; charset=utf-8")
                 else:
                     self._send(200, json.dumps(run), "application/json; charset=utf-8")
+                return
+            if route == "/api/activity":
+                try:
+                    self._send_json(200, activity_store.get())
+                except Exception as exc:
+                    self._send(500, json.dumps({"error": str(exc)}),
+                               "application/json; charset=utf-8")
                 return
             if route == "/api/dashboard":
                 try:

@@ -14,6 +14,7 @@
       <div class="rail-label">WORKSPACES</div>
       <button class="nav active" data-view="training"><span>◫</span> Training <i>LIVE</i></button>
       <button class="nav" data-view="think"><span>◉</span> Think <i>READY</i></button>
+      <button class="nav" data-view="activity"><span>◈</span> Activity <i>LIVE</i></button>
       <div class="rail-footer"><span class="pulse"></span> LOCAL MACHINE<br><small>offline-capable · private</small></div>
     </aside>
     <main>
@@ -53,6 +54,33 @@
           <div class="trace-views"><article><p class="eyebrow">ATTENTION TO CONTEXT</p><div id="attention-bars" class="attention-bars"><span class="empty-trace">Choose a loaded model and inspect a prompt.</span></div></article><article><p class="eyebrow">LAYER SIGNALS AT SELECTED TOKEN</p><div id="pathway-layers" class="pathway-layers"></div></article></div>
         </section>
         <section class="panel compare-panel"><div class="panel-head"><div><p class="eyebrow">CHECKPOINT REPLAY</p><h2>Same prompt, two checkpoints</h2></div><button id="compare-checkpoints" class="action secondary" disabled>COMPARE MODELS</button></div><div class="control-row"><label class="field grow">MODEL A<select id="compare-model-a"></select></label><label class="field grow">MODEL B<select id="compare-model-b"></select></label></div><p id="checkpoint-compare-note" class="notice">CPU-only sequential comparison; tokenizer alignment is checked before comparing predictions.</p><div id="checkpoint-compare-result" class="model-comparison"></div></section>
+      </section>
+      <section id="activity-view" class="view hidden">
+        <div class="page-head"><div><p class="eyebrow">AGENT ACTIVITY / STREAMS</p><h1>Activity map</h1><p class="subhead">Inference, tool calls, and memory access — one canvas, three feeds.</p></div><div class="updated">UPDATED <b id="activity-updated-at">—</b></div></div>
+        <section class="panel map-panel">
+          <div class="panel-head"><div><p class="eyebrow">NEURAL MAP</p><h2>Stream topology</h2></div><span class="chart-key"><b class="lime"></b> inference <b class="orange"></b> tools <b class="cyan"></b> memory</span></div>
+          <div class="map-wrap"><canvas id="activity-map" aria-label="Activity neural map"></canvas><aside id="map-inspector" class="map-inspector"><p class="eyebrow">INSPECTOR</p><p class="subhead small">Click a node to inspect the event behind it.</p></aside></div>
+        </section>
+        <div class="activity-grid">
+          <section class="panel" id="inference-panel">
+            <div class="panel-head"><div><p class="eyebrow">INFERENCE</p><h2>Model calls</h2></div><span class="badge" id="inference-badge">—</span></div>
+            <div id="inference-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>PROVIDER</th><th>MODEL</th><th>TOK</th><th>LAT ms</th><th>¢</th></tr></thead><tbody id="inference-feed"></tbody></table></div>
+            <p id="inference-notice" class="notice small">Covers HFM-routed calls only.</p>
+          </section>
+          <section class="panel" id="tools-panel">
+            <div class="panel-head"><div><p class="eyebrow">TOOL CALLS</p><h2>Agent tools</h2></div><span class="badge" id="tools-badge">—</span></div>
+            <div id="tools-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>TOOL</th><th>KIND</th><th>SESSION</th></tr></thead><tbody id="tools-feed"></tbody></table></div>
+            <p id="tools-notice" class="notice small">Invocation/result pairs from session transcripts.</p>
+          </section>
+          <section class="panel" id="memory-panel">
+            <div class="panel-head"><div><p class="eyebrow">MEMORY ACCESS</p><h2>Mnemosyne</h2></div><span class="badge" id="memory-badge">—</span></div>
+            <div id="memory-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>TIER</th><th>MEMORY</th><th>RECALLS</th></tr></thead><tbody id="memory-feed"></tbody></table></div>
+            <p id="memory-notice" class="notice small">Recent and most-recalled memories.</p>
+          </section>
+        </div>
       </section>
       <footer>LLM LAB <span>·</span> local measurements, no mystery meat telemetry</footer>
     </main>

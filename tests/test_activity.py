@@ -182,6 +182,11 @@ def test_collect_activity_assembles_map_and_never_raises(tmp_path):
     assert all(s in node_ids and t in node_ids for s, t in link_pairs)
     session_hubs = [n for n in nodes if n["kind"] == "session"]
     assert session_hubs and session_hubs[0]["id"].startswith("session:")
+    # event nodes carry the row_key the UI uses to highlight their feed row
+    event_nodes = [n for n in nodes if n["kind"] == "event"]
+    assert event_nodes and all(n.get("row_key") for n in event_nodes)
+    assert any(n["row_key"].startswith("tools:") for n in event_nodes)
+    assert any(n["row_key"].startswith("memory:") for n in event_nodes)
 
 
 def test_collect_activity_with_all_sources_missing_still_returns(tmp_path):
