@@ -35,13 +35,16 @@ import json
 import math
 import os
 import statistics
+import sys
 
 import numpy as np
 import torch
 
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE_BIN = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin")
-CACHE_META = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin.meta.json")
+if os.path.join(LAB, "scripts") not in sys.path:
+    sys.path.insert(0, os.path.join(LAB, "scripts"))
+import val_fixture  # noqa: E402
+
 CKPT = os.path.join(LAB, "checkpoints",
                     "exp002_pythia_tokenizer_202609302055_step13500.pt")
 WEIGHTS = os.path.join(LAB, "data", "incoming", "pythia70m_step1000")
@@ -49,7 +52,6 @@ WEIGHTS = os.path.join(LAB, "data", "incoming", "pythia70m_step1000")
 # 300B-token final (step143000) and is the WRONG denominator for a 2B-token
 # comparison -- using it produced the misleading +18.7%.
 OUT = os.path.join(LAB, "reports", "matched_tokens_70m.json")
-BPT_TRAINER = 3.9104
 VAL_FRAC = 0.01
 OURS_TOKENS = 2_003_992_003
 PYTHIA_STEP = 1000
@@ -60,14 +62,15 @@ def main():
     from model.transformer import Transformer
     from transformers import AutoModelForCausalLM
 
-    meta = json.load(open(CACHE_META, encoding="utf-8"))
-    total = int(meta["tokens"])
-    cut = int(total * (1.0 - VAL_FRAC))
-    arr = np.memmap(CACHE_BIN, dtype="int32", mode="r")
-    ids = torch.from_numpy(np.asarray(arr[cut:total], dtype=np.int64))
+    cache_bin, _meta_path, meta = val_fixture.resolve()
+    ids_np = val_fixture.tail_ids(cache_bin, VAL_FRAC, meta)
+    ids = torch.from_numpy(ids_np)
+    bpt = val_fixture.trainer_bpt(ids_np, val_fixture.encoder_path(meta))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"val ids from TOKEN CACHE tail: {ids.shape[0]:,}  device {dev}")
+    print(f"val ids from TOKEN CACHE tail: {ids.shape[0]:,}  bpt {bpt:.4f}  "
+          f"device {dev}")
+    print(f"  {val_fixture.describe(cache_bin, meta, VAL_FRAC)}")
     print(f"\n=== token matching ===")
     pyt = PYTHIA_STEP * PYTHIA_TOK_STEP
     print(f"  ours            {OURS_TOKENS:>15,} tokens  (28.3 tok/param)")
@@ -127,8 +130,8 @@ def main():
 
     N_REG = 8
     print(f"\n=== head to head, ctx 512 for BOTH (identical ids, identical windows) ===")
-    o512 = [v * log2e / BPT_TRAINER for v in score(ours, False, 512, N_REG)]
-    r512 = [v * log2e / BPT_TRAINER for v in score(ref, True, 512, N_REG)]
+    o512 = [v * log2e / bpt for v in score(ours, False, 512, N_REG)]
+    r512 = [v * log2e / bpt for v in score(ref, True, 512, N_REG)]
     print(f"  ours @512        {statistics.mean(o512):.4f}  (sd {statistics.stdev(o512):.4f})")
     print(f"  pythia@{PYTHIA_STEP} @512 {statistics.mean(r512):.4f}  "
           f"(sd {statistics.stdev(r512):.4f})")
@@ -140,7 +143,7 @@ def main():
     print("    so this UNDERSTATES pythia. It is the fair-on-data number.")
 
     print(f"\n=== pythia at its NATIVE ctx 2048 (context for the split, 6 regions) ===")
-    r2048 = [v * log2e / BPT_TRAINER for v in score(ref, True, 2048, 6)]
+    r2048 = [v * log2e / bpt for v in score(ref, True, 2048, 6)]
     print(f"  pythia@{PYTHIA_STEP} @2048 {statistics.mean(r2048):.4f}  "
           f"(sd {statistics.stdev(r2048):.4f})")
     ctx_penalty = statistics.mean(r512) - statistics.mean(r2048)
@@ -152,6 +155,17 @@ def main():
     print("    of the gap is the context mismatch we impose, not training quality.")
 
     out = {
+        "fixture": {
+            "cache": os.path.basename(cache_bin),
+            "cache_path": cache_bin,
+            "val_desc": val_fixture.describe(cache_bin, meta, VAL_FRAC),
+            "bytes_per_token": round(bpt, 6),
+            "scored_on": "2026-10-06",
+            "supersedes": "the same comparison on the 2.004B cache tail "
+                          "(20,039,921 ids, bpt 3.9104): that region sits inside "
+                          "the 160M run's training set, so it cannot be the "
+                          "shared fixture any more",
+        },
         "token_matched": {
             "ours_tokens": OURS_TOKENS,
             "ours_tok_per_param": round(OURS_TOKENS / 70_739_072, 1),

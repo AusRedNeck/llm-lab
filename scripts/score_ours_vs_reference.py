@@ -15,15 +15,20 @@ WHY THIS EXISTS
     attributable to the model rather than to the harness.
 
     VALIDITY RULES (borrowed from score_pythia70m_reference.py, deliberately identical)
-    - Same BYTES: data/incoming/pile_val_slice.txt, the exact last 1% of the token cache.
-    - Same bpb convention: bpb = mean NLL per BYTE, using the trainer's 3.9104 bytes/token.
+    - Same IDS: the val tail of the ACTIVE run's token cache, read from the memmap by
+      scripts/val_fixture.py. Never decoded to text. (The 2026-10-01 version of this
+      script hardcoded the 70M cache; since the 160M run trains on the full-corpus
+      cache, that tail would have been inside its training set.)
+    - Same bpb convention: bpb = mean NLL * log2(e) / bytes-per-token, with
+      bytes-per-token MEASURED on the scored ids (trainer's recipe), not a constant
+      carried over from a previous tail.
     - Fixed seed, non-overlapping windows, HF shifts labels internally (do NOT slice).
     - Same ctx (512) and same number of scored tokens as the stored reference.
 
-    A note on the one thing this CANNOT settle: our trainer's val is the last 1% of the
-    2,003,992,003-token cache, and pile_val_slice.txt is the byte-exact replay of that
-    same cut (see data/incoming/pile_val_slice.meta.json). Same text. So this is a
-    like-for-like re-measurement, not a second dataset.
+    CANNOT SETTLE: whether our trainer's in-loop val_bpb matches this harness. The
+    trainer scores its own tail with its own eval path; this is a separate
+    measurement of the same ids, so quote the harness number and the logged number
+    as two instruments, not one.
 
 Usage:
     .venv/Scripts/python.exe scripts/score_ours_vs_reference.py --ckpt <path> [--batches 60]
@@ -32,15 +37,20 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 
 import numpy as np
 import torch
 
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if os.path.join(LAB, "scripts") not in sys.path:
+    sys.path.insert(0, os.path.join(LAB, "scripts"))
+import val_fixture  # noqa: E402
+
 SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
 REF_REPORT = os.path.join(LAB, "reports", "pythia70m_reference.json")
-BPT_TRAINER = 3.9104
+LEGACY_BPT = 3.9104      # the OLD tail's bytes/token; --source slice only
 
 
 def _logits(model, bt, is_hf):
@@ -73,8 +83,14 @@ def _mean_nll(logits, bt):
     return torch.nn.functional.cross_entropy(sl.float(), tl, reduction="mean")
 
 
-def score_ids(model, ids, batches, batch, ctx, seed, dev, label, is_hf):
-    """Mean NLL/token over non-overlapping windows. Shared by both models, unchanged."""
+def score_ids(model, ids, batches, batch, ctx, seed, dev, label, is_hf,
+              bpt=LEGACY_BPT):
+    """Mean NLL/token over non-overlapping windows. Shared by both models, unchanged.
+
+    `bpt` is the bytes-per-token of the ids being scored (val_fixture.trainer_bpt,
+    the trainer's own recipe). Dividing by a stale constant does not make two
+    numbers comparable -- it makes them comparable-looking.
+    """
     n = ids.shape[0]
     g = torch.Generator().manual_seed(seed)
     need = batches * batch * ctx
@@ -95,7 +111,7 @@ def score_ids(model, ids, batches, batch, ctx, seed, dev, label, is_hf):
         if bi % 20 == 0:
             print(f"  [{label}] batch {bi+1}/{batches}  running nll/tok {tot_nll/tot_tok:.4f}")
     nll = tot_nll / tot_tok
-    bpb = nll * math.log2(math.e) / BPT_TRAINER
+    bpb = nll * math.log2(math.e) / bpt
     print(f"  [{label}] nll/token {nll:.4f} nats  bpb {bpb:.4f}  "
           f"({tot_tok:,} tokens in {time.time()-t0:.0f}s)")
     return {"nll_per_token_nats": round(nll, 6), "bpb": round(bpb, 6),
@@ -111,6 +127,12 @@ def main():
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--skip-reference", action="store_true")
     ap.add_argument("--val-frac", type=float, default=0.01)
+    ap.add_argument("--cache", default=None,
+                    help="token cache to take the val tail from "
+                         "(default: val_fixture.resolve = the active run's cache)")
+    ap.add_argument("--reference", default=os.path.join(
+        LAB, "data", "incoming", "pythia70m_weights"),
+        help="HF snapshot dir for the reference model")
     a = ap.parse_args()
 
     from transformers import AutoModelForCausalLM
@@ -125,16 +147,20 @@ def main():
     # models on decoded text is still "the same text for both", so the gap looks sane,
     # but it is not comparable to the trainer's own val_bpb and the absolute numbers
     # are wrong by ~0.04 bpb. Never route this through text again.
-    import numpy as _np
-    CACHE_BIN = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin")
-    CACHE_META = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin.meta.json")
-    meta = json.load(open(CACHE_META, encoding="utf-8"))
-    total = int(meta["tokens"])
-    cut = int(total * (1.0 - a.val_frac))
-    arr = _np.memmap(CACHE_BIN, dtype="int32", mode="r")
-    ids = torch.from_numpy(_np.asarray(arr[cut:total], dtype=_np.int64))
-    print(f"val ids from TOKEN CACHE tail: {ids.shape[0]:,} tokens "
-          f"(total {total:,}, val_frac {a.val_frac})  device {dev}")
+    # Score the TOKEN CACHE TAIL. This is the whole point of the script: the trainer's
+    # split_corpus() holds out ids [cut:] of the memmapped cache, so the comparison has
+    # to use those exact ids -- from the cache the run in question TRAINED on, which
+    # val_fixture resolves (the old 2.004B tail sits inside the 160M training set).
+    # The historical fixture (pile_val_slice.txt) was produced by decoding the tail to
+    # text and re-tokenizing it: a lossy round trip matching the cache on 1.68% of
+    # positions. Never route held-out ids through text again.
+    cache_bin, _meta_path, meta = val_fixture.resolve(a.cache)
+    ids_np = val_fixture.tail_ids(cache_bin, a.val_frac, meta)
+    ids = torch.from_numpy(ids_np)
+    bpt = val_fixture.trainer_bpt(ids_np, val_fixture.encoder_path(meta))
+    print(f"val ids from TOKEN CACHE tail: {ids.shape[0]:,} tokens  bpt {bpt:.4f}"
+          f"  device {dev}")
+    print(f"  {val_fixture.describe(cache_bin, meta, a.val_frac)}")
     print("  (not pile_val_slice.txt -- that file is a lossy decode/encode round trip)")
 
     # ---- our checkpoint, rebuilt as a real HF model so the forward pass is identical
@@ -160,23 +186,24 @@ def main():
     ours.to(dev).eval()
 
     res = {"checkpoint": os.path.basename(a.ckpt), "checkpoint_step": ck.get("step"),
-           "slice": SLICE, "seed": a.seed, "batches": a.batches, "batch": a.batch,
-           "ctx": a.ctx, "bytes_per_token_trainer": BPT_TRAINER, "device": dev,
+           "cache": cache_bin, "cache_desc": val_fixture.describe(cache_bin, meta, a.val_frac),
+           "seed": a.seed, "batches": a.batches, "batch": a.batch,
+           "ctx": a.ctx, "bytes_per_token": round(bpt, 6), "device": dev,
            "val_bpb_from_train_log": ck.get("val_bpb")}
 
     print("\n=== ours (this lab's checkpoint, same harness) ===")
     res["ours"] = score_ids(ours, ids, a.batches, a.batch, a.ctx, a.seed, dev,
-                             "ours", is_hf=False)
+                            "ours", is_hf=False, bpt=bpt)
 
     # ---- the reference, re-scored in the SAME process for a like-for-like delta
     if not a.skip_reference:
-        print("\n=== pythia-70m reference weights (re-scored identically) ===")
+        print(f"\n=== reference weights, re-scored identically: {a.reference} ===")
         ref = AutoModelForCausalLM.from_pretrained(
-            os.path.join(LAB, "data", "incoming", "pythia70m_weights"),
-            torch_dtype=torch.float32)
+            a.reference, torch_dtype=torch.float32)
         ref.to(dev).eval()
         res["reference_rerun"] = score_ids(ref, ids, a.batches, a.batch, a.ctx,
-                                           a.seed, dev, "pythia-70m", is_hf=True)
+                                           a.seed, dev, "reference", is_hf=True,
+                                           bpt=bpt)
 
     stored = None
     if os.path.exists(REF_REPORT):

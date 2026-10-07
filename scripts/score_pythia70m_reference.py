@@ -1,41 +1,62 @@
 #!/usr/bin/env python3
-"""Score EleutherAI/pythia-70m on our held-out Pile val slice (the away game).
+"""Score an EleutherAI Pythia checkpoint on OUR held-out Pile val tail (the away game).
 
 WHY THIS EXISTS
     The full-diet Pile arms were launched to measure the open-weights gap, but
     pythia-70m weights had never been downloaded and eval/pile_eval.py had
     never been run, so the comparison the runs exist to produce did not exist.
-    This produces the reference number.
+    This produces the reference number. It is now parametrised so the same
+    harness produces the pythia-160m reference too.
 
     VALIDITY RULES ENFORCED HERE
-    - Same BYTES as our runs: data/incoming/pile_val_slice.txt, the exact last
-      1% of the token cache (see scripts/extract_val_slice.py).
-    - Same ENCODER: the real HF Pythia tokenizer, vocab 50304.
-    - Same bpb convention: bpb = mean NLL per BYTE, so it is encoder-independent
-      and directly comparable to the training runs' bpb.
+    - Same IDS as our runs: the val tail of the token cache itself, read from
+      the memmap by scripts/val_fixture.py -- never decoded to text. The tail
+      is the ACTIVE run's cache (train_job.json --tok_cache), because the old
+      2.004B cache's tail sits inside the 160M training set.
+    - Same ENCODER: whichever tokenizer wrote that cache (read from its
+      sidecar `vocab`), so ids mean what they meant when they were trained on.
+    - Same bpb convention: bpb = mean NLL * log2(e) / bytes-per-token, with
+      bytes-per-token recomputed for the scored tail by the trainer's own
+      recipe (train.val_bytes_per_token). The old hardcoded 3.9104 belonged to
+      the OLD tail and is wrong here -- the new tail measures 3.8743.
     - Fixed seed, deterministic sampling, no training-loop contamination.
 
 Usage:
-    python scripts/score_pythia70m_reference.py [--batches 60] [--ctx 512]
+    python scripts/score_pythia70m_reference.py                       # pythia-70m main
+    python scripts/score_pythia70m_reference.py \
+        --weights data/incoming/pythia160m_step1000 --name EleutherAI/pythia-160m \
+        --out reports/pythia160m_step1000_reference.json
 """
 import argparse
-import math
 import json
+import math
 import os
+import sys
 
 import numpy as np
 import torch
 
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WEIGHTS = os.path.join(LAB, "data", "incoming", "pythia70m_weights")
+if os.path.join(LAB, "scripts") not in sys.path:
+    sys.path.insert(0, os.path.join(LAB, "scripts"))
+import val_fixture  # noqa: E402
+
 SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
-CACHE_BIN = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin")
-CACHE_META = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin.meta.json")
-OUT = os.path.join(LAB, "reports", "pythia70m_reference.json")
+LEGACY_BPT = 3.9104      # the OLD tail's bytes/token; only for --source slice
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--weights", default=os.path.join(LAB, "data", "incoming",
+                                                      "pythia70m_weights"),
+                    help="HF snapshot dir to score (default: pythia-70m main)")
+    ap.add_argument("--name", default="EleutherAI/pythia-70m",
+                    help="model label written into the report")
+    ap.add_argument("--out", default=os.path.join(LAB, "reports",
+                                                  "pythia70m_reference.json"))
+    ap.add_argument("--cache", default=None,
+                    help="token cache to take the val tail from "
+                         "(default: val_fixture.resolve = the active run's cache)")
     ap.add_argument("--batches", type=int, default=60)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--ctx", type=int, default=512)
@@ -43,39 +64,43 @@ def main():
     ap.add_argument("--source", choices=["cache", "slice"], default="cache",
                     help="cache = score the TOKEN CACHE tail directly (correct, and "
                          "what train.py's split_corpus actually holds); slice = score "
-                         "pile_val_slice.txt, which is a decode->write->re-encode "
-                         "round trip and is NOT token-identical to the cache "
-                         "(1.68% match, diverges at index 42843). Default changed "
-                         "to cache on 2026-10-01; 'slice' reproduces the old, "
-                         "incorrect number for comparison.")
+                         "pile_val_slice.txt, a decode->write->re-encode round trip "
+                         "that is NOT token-identical to any cache tail (1.68% match). "
+                         "'slice' exists only to reproduce the old, invalid number.")
     ap.add_argument("--val-frac", type=float, default=0.01)
     a = ap.parse_args()
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModelForCausalLM.from_pretrained(WEIGHTS, torch_dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(a.weights, torch_dtype=torch.float32)
     model.to(dev).eval()
 
+    cache_bin = cache_desc = None
     if a.source == "cache":
-        # Score the ids the trainer held out. Read straight from the memmapped cache:
-        # going through decoded text silently changes the token stream and makes the
-        # comparison meaningless (see --source help).
-        import numpy as _np
-        meta = json.load(open(CACHE_META, encoding="utf-8"))
-        total = int(meta["tokens"])
-        cut = int(total * (1.0 - a.val_frac))
-        arr = _np.memmap(CACHE_BIN, dtype="int32", mode="r")
-        ids = torch.from_numpy(_np.asarray(arr[cut:total], dtype=_np.int64))
-        print(f"cache tail: {ids.shape[0]:,} tokens "
-              f"(total {total:,}, val_frac {a.val_frac}) device {dev}")
+        # Score the ids the trainer held out. Read straight from the memmap:
+        # going through decoded text silently changes the token stream and makes
+        # the comparison meaningless (see --source help).
+        cache_bin, _meta_path, meta = val_fixture.resolve(a.cache)
+        ids = torch.from_numpy(val_fixture.tail_ids(cache_bin, a.val_frac, meta))
+        bpt = val_fixture.trainer_bpt(
+            ids.numpy(), val_fixture.encoder_path(meta))
+        cut = val_fixture.cut_index(
+            val_fixture.total_tokens(cache_bin, meta), a.val_frac)
+        cache_desc = (f"{os.path.basename(cache_bin)} tail [{cut:,}:] "
+                      f"({val_fixture.describe(cache_bin, meta, a.val_frac)})")
+        print(f"cache tail: {ids.shape[0]:,} tokens  bpt {bpt:.4f}  device {dev}")
+        print(f"  {cache_desc}")
     else:
-        tok = AutoTokenizer.from_pretrained(WEIGHTS)
+        tok = AutoTokenizer.from_pretrained(os.path.dirname(
+            val_fixture.encoder_path({})))
         raw = open(SLICE, "rb").read().decode("utf-8", errors="replace")
-        print(f"slice: {len(raw):,} chars, {len(raw.encode('utf-8')):,} bytes, "
-              f"device {dev}  <-- LOSSY: re-tokenized text, NOT the cache tail")
+        print(f"slice: {len(raw):,} chars  <-- LOSSY: re-tokenized text, "
+              f"NOT a cache tail")
         ids = tok(raw, return_tensors="pt").input_ids[0]
+        bpt = LEGACY_BPT
         print(f"tokenized: {ids.shape[0]:,} tokens (vocab {tok.vocab_size})")
+
     n = ids.shape[0]
     need = a.batches * a.batch * a.ctx
     if n < need:
@@ -108,39 +133,39 @@ def main():
 
     nll_per_tok = tot_nll / tot_tok
     # bpb must use the SAME formula the trainer uses, or the gap is arithmetic
-    # noise. train.py line ~766: bpb = nll_nats * log2(e) / bytes_per_token.
+    # noise. train.py: bpb = nll_nats * log2(e) / bytes_per_token.
     # The log2(e) factor is not optional: without it every number comes out
     # ~1.44x too large (nats vs bits) and reads 13.49 instead of ~9.4.
-    BPT_TRAINER = 3.9104
-    bpt_recomputed = total_bytes / n
-    bpb = nll_per_tok * math.log2(math.e) / BPT_TRAINER
+    bpb = nll_per_tok * math.log2(math.e) / bpt
     res = {
-        "model": "EleutherAI/pythia-70m",
-        "weights": WEIGHTS,
+        "model": a.name,
+        "weights": a.weights,
         "source": a.source,
-        "source_note": ("token cache tail (ids identical to train.py split_corpus)"
+        "source_note": ("val tail of the ACTIVE run's token cache; ids identical "
+                        "to train.py split_corpus, bytes-per-token measured on "
+                        "those same ids"
                         if a.source == "cache" else
                         "pile_val_slice.txt - LOSSY decode/encode round trip, NOT "
-                        "token-identical to the cache tail; historical number only"),
+                        "token-identical to any cache tail; historical number only"),
+        "cache": cache_bin if a.source == "cache" else None,
         "val_frac": a.val_frac,
-        "slice": SLICE if a.source == "slice" else CACHE_BIN,
         "seed": a.seed, "batches": a.batches, "batch": a.batch, "ctx": a.ctx,
         "tokens_scored": tot_tok,
-        "bytes_per_token_trainer": BPT_TRAINER,
-        "bytes_per_token_recomputed": round(bpt_recomputed, 4),
+        "bytes_per_token": round(bpt, 6),
         "nll_per_token_nats": round(nll_per_tok, 6),
         "bpb": round(bpb, 6),
         "device": dev,
-        "note": "bpb = nll_nats * log2(e) / 3.9104, matching train.py's "
+        "note": "bpb = nll_nats * log2(e) / bytes_per_token, matching train.py's "
                 "bpb_factor exactly so this is directly comparable to the "
                 "training runs' val bpb. Windows are non-overlapping and HF "
                 "shifts labels internally (do NOT slice inputs yourself).",
     }
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    json.dump(res, open(OUT, "w", encoding="utf-8"), indent=2)
-    print("\n=== pythia-70m reference ===")
-    print(f"  nll/token {nll_per_tok:.4f} nats   bpb {bpb:.4f} bits/byte (x log2e / {BPT_TRAINER} b/tok)")
-    print(f"  wrote {OUT}")
+    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    json.dump(res, open(a.out, "w", encoding="utf-8"), indent=2)
+    print(f"\n=== {a.name} reference ===")
+    print(f"  nll/token {nll_per_tok:.4f} nats   bpb {bpb:.4f} bits/byte "
+          f"(x log2e / {bpt:.4f} b/tok)")
+    print(f"  wrote {a.out}")
 
 
 if __name__ == "__main__":

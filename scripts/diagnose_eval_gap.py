@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Isolate WHY our checkpoint scores 1.5038 through the reference harness but the
+"""HISTORICAL (2026-10-06) -- kept for the method, not for its numbers.
+This scores data/incoming/pile_val_slice.txt with BPT_TRAINER = 3.9104, both of
+which are retired: the .txt is a lossy round trip of the OLD 2.004B cache tail,
+and 3.9104 is that tail's bytes/token (the current fixture is
+pile_train_full_bpe_pythia_hf.bin, bpt 3.8743, resolved by scripts/val_fixture).
+Do not re-run this to produce a number to quote; re-run it only to reproduce the
+2026-10-01 diagnosis. The A/B/C rulings it produced (precision, window length,
+sample size) were about the HARNESS and still stand.
+
+Isolate WHY our checkpoint scores 1.5038 through the reference harness but the
 trainer logged 1.40325 on what is supposed to be the same held-out data.
 
 Three candidate causes, tested independently rather than argued about:

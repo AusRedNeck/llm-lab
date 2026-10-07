@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Settle whether the trainer's val_bpb (1.40325) is real or under-reported.
+"""HISTORICAL (2026-10-06) -- its conclusions belong to the old fixture.
+This study hardcoded CACHE_BIN = pile_train_full_bpe_pythia70m.bin and
+BPT_TRAINER = 3.9104 (that tail's bytes/token). Both are retired: the shared
+fixture is now pile_train_full_bpe_pythia_hf.bin, bpt 3.8743, resolved by
+scripts/val_fixture.py. Re-run only to reproduce the 2026-10-01 variance
+finding; for a current number, use score_ours_vs_reference.py.
+
+Settle whether the trainer's val_bpb (1.40325) is real or under-reported.
 
 STATE OF THE EVIDENCE (2026-10-01)
   - Val DATA identity was the first suspect and it WAS a real bug: pile_val_slice.txt
