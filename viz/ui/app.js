@@ -334,13 +334,18 @@ async function refreshThinkStatus() {
 window.setInterval(()=>{if(viewName==="think"&&thinkReady&&!generationBusy)refreshThinkStatus();},5000);
 
 /* ---------------- Activity workspace ---------------- */
-const streamColor = {inference:"#c5ef70", tools:"#ffae68", memory:"#78d9d1"};
+const streamColor = {inference:"#c5ef70", tools:"#ffae68", memory:"#78d9d1",
+                     cron:"#a98be8", kanban:"#f47b83", mesh:"#7fb3e8", models:"#e8d17f"};
 let activityPayload = null, activityBusy = false;
 
 function hhmm(ts) {
   if(ts === null || ts === undefined) return "—";
-  const s = String(ts), i = s.indexOf("T");
-  return i >= 0 ? s.slice(i + 1, i + 9) : s.slice(0, 8);
+  const d = new Date(typeof ts === "number" || /^\d+(\.\d+)?$/.test(String(ts)) ? Number(ts) * (String(ts).length > 12 ? 1 : 1000) : ts);
+  if(isNaN(d)) { const s = String(ts), i = s.indexOf("T"); return i >= 0 ? s.slice(i + 1, i + 9) : s.slice(0, 8); }
+  const now = new Date(), pad = n => String(n).padStart(2, "0");
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return sameDay ? clock : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${clock.slice(0, 5)}`;
 }
 function statCards(target, cards) {
   const box = $(target); box.replaceChildren();
@@ -362,65 +367,97 @@ function streamDown(prefix, error) {
   n.classList.add("error");
 }
 
-function renderInference(s) {
-  if(!s.ok) return streamDown("inference", s.error);
-  const live = s.freshness === "LIVE";
-  $("inference-badge").textContent = live ? "LIVE" : "FILE";
-  $("inference-badge").classList.toggle("good", live);
-  statCards("inference-stats", [
-    ["LAST HOUR", String(s.stats.last_hour_count ?? 0), "requests"],
-    ["TOKENS", String(s.stats.tokens_total ?? 0), "prompt + completion"],
-    ["SPEND", ((s.stats.cost_cents ?? 0) / 100).toFixed(4) + " $", "routed spend"],
-    ["ERRORS", String(s.stats.errors ?? 0), "last hour"],
-  ]);
-  const feed = $("inference-feed"); feed.replaceChildren();
-  s.events.forEach(e => feed.append(tr(
-    [hhmm(e.ts), e.provider, e.model,
+/* Panel registry: add a stream = one entry here + its server collector.
+   rowKey must match the Python row_key in viz/activity.py/_build_map. */
+const PANEL_DEFS = [
+  {key: "inference", eyebrow: "INFERENCE", title: "Model calls",
+   cols: ["TIME", "PROVIDER", "MODEL", "TOK", "LAT ms", "¢"],
+   row: e => [hhmm(e.ts), e.provider, e.model,
      String((e.tokens_prompt || 0) + (e.tokens_completion || 0)),
      String(e.latency_ms), (e.cost_cents || 0).toFixed(1) + " ¢"],
-    "inference:" + e.ts_epoch_ms)));
-  const n = $("inference-notice"); n.classList.remove("error");
-  n.textContent = live ? "Covers HFM-routed calls only."
-    : "HFM proxy down — showing last file state. Covers HFM-routed calls only.";
-}
-
-function renderTools(s) {
-  if(!s.ok) return streamDown("tools", s.error);
-  $("tools-badge").textContent = "LIVE";
-  $("tools-badge").classList.add("good");
-  const top = Object.entries(s.stats.by_tool || {}).sort((a, b) => b[1] - a[1])[0];
-  statCards("tools-stats", [
-    ["EVENTS", String(s.stats.total ?? 0), "in window"],
-    ["INVOCATIONS", String(s.stats.invocations ?? 0), "calls made"],
-    ["RESULTS", String(s.stats.results ?? 0), "returns"],
-    ["TOP TOOL", top ? top[0] : "—", top ? top[1] + " events" : ""],
-  ]);
-  const feed = $("tools-feed"); feed.replaceChildren();
-  s.events.forEach(e => feed.append(tr(
-    [hhmm(e.iso || e.timestamp), e.tool_name || "—", e.kind,
+   stats: s => [["LAST HOUR", String(s.last_hour_count ?? 0), "requests"],
+     ["TOKENS", String(s.tokens_total ?? 0), "prompt + completion"],
+     ["SPEND", ((s.cost_cents ?? 0) / 100).toFixed(4) + " $", "routed spend"],
+     ["ERRORS", String(s.errors ?? 0), "last hour"]],
+   foot: s => s.freshness === "LIVE" ? "Covers HFM-routed calls only."
+     : "HFM proxy down — showing last file state. Covers HFM-routed calls only."},
+  {key: "tools", eyebrow: "TOOL CALLS", title: "Agent tools",
+   cols: ["TIME", "TOOL", "KIND", "SESSION"],
+   row: e => [hhmm(e.iso || e.timestamp), e.tool_name || "—", e.kind,
      (e.session_title || e.session_id || "—")],
-    "tools:" + e.id)));
-  const n = $("tools-notice"); n.classList.remove("error");
-  n.textContent = "Invocation/result pairs from session transcripts.";
-}
-
-function renderMemory(s) {
-  if(!s.ok) return streamDown("memory", s.error);
-  $("memory-badge").textContent = "LIVE";
-  $("memory-badge").classList.add("good");
-  statCards("memory-stats", [
-    ["RECALLED", String(s.stats.recalled_total ?? 0), "across window"],
-    ["WORKING", String(s.stats.working ?? 0), "events shown"],
-    ["EPISODIC", String(s.stats.episodic ?? 0), "events shown"],
-    ["GRAPH", String((s.stats.graph_edges ?? 0) + (s.stats.triples ?? 0)), "edges + triples"],
-  ]);
-  const feed = $("memory-feed"); feed.replaceChildren();
-  s.events.forEach(e => feed.append(tr(
-    [hhmm(e.last_recalled || e.timestamp), e.tier, e.preview,
+   stats: s => { const top = Object.entries(s.by_tool || {}).sort((a, b) => b[1] - a[1])[0];
+     return [["EVENTS", String(s.total ?? 0), "in window"],
+       ["INVOCATIONS", String(s.invocations ?? 0), "calls made"],
+       ["RESULTS", String(s.results ?? 0), "returns"],
+       ["TOP TOOL", top ? top[0] : "—", top ? top[1] + " events" : ""]]; },
+   foot: () => "Invocation/result pairs from session transcripts."},
+  {key: "memory", eyebrow: "MEMORY ACCESS", title: "Mnemosyne",
+   cols: ["TIME", "TIER", "MEMORY", "RECALLS"],
+   row: e => [hhmm(e.last_recalled || e.timestamp), e.tier, e.preview,
      String(e.recall_count || 0)],
-    "memory:" + e.tier + ":" + e.id)));
-  const n = $("memory-notice"); n.classList.remove("error");
-  n.textContent = "Recent memories, most-recalled first in window.";
+   rowKey: e => "memory:" + e.tier + ":" + e.id,
+   stats: s => [["RECALLED", String(s.recalled_total ?? 0), "across window"],
+     ["WORKING", String(s.working ?? 0), "events shown"],
+     ["EPISODIC", String(s.episodic ?? 0), "events shown"],
+     ["GRAPH", String((s.graph_edges ?? 0) + (s.triples ?? 0)), "edges + triples"]],
+   foot: () => "Recent memories, most-recalled first in window."},
+  {key: "cron", eyebrow: "CRON", title: "Scheduled jobs",
+   cols: ["TIME", "JOB", "STATUS", "DELIVERY"],
+   row: e => [hhmm(e.ts), e.job, e.status, e.delivery || "—"],
+   stats: s => [["RUNS", String(s.total ?? 0), "in window"],
+     ["FAILED", String(s.failed ?? 0), "in window"],
+     ["OPEN INCIDENTS", String(s.open_incidents ?? 0), "unacked"],
+     ["STATUSES", String(Object.keys(s.by_status || {}).length), "kinds seen"]],
+   foot: () => "Latest executions from cron/executions.db."},
+  {key: "kanban", eyebrow: "KANBAN", title: "Task board",
+   cols: ["TIME", "EVENT", "TASK", "ASSIGNEE"],
+   row: e => [hhmm(e.ts), e.kind, e.title || e.task_id, e.assignee || "—"],
+   stats: s => [["TASKS", String(s.total_tasks ?? 0), "all boards"],
+     ["OPEN", String(s.open ?? 0), "not done/archived"],
+     ["EVENTS", String(s.events_in_window ?? 0), "in window"],
+     ["ARCHIVED", String((s.by_status || {}).archived ?? 0), "settled"]],
+   foot: () => "Task events across every board."},
+  {key: "mesh", eyebrow: "MESH", title: "Peer boxes",
+   cols: ["TIME", "PEER", "STATE", "LAT ms"],
+   row: e => [hhmm(e.ts), e.name, e.ok ? "UP" : "DOWN",
+     e.ok ? String(e.latency_ms) : "—"],
+   stats: s => [["UP", String(s.up ?? 0) + "/" + String(s.total ?? 0), "peers reachable"],
+     ["DOWN", String((s.total ?? 0) - (s.up ?? 0)), "or asleep"],
+     ["", "", ""], ["", "", ""]],
+   foot: () => "Live /health probes of config bot_peers (0.4s timeout). Sleeping Macs read DOWN until they wake."},
+  {key: "models", eyebrow: "MODELS", title: "What we're making",
+   cols: ["TIME", "CHECKPOINT", "KIND", "SIZE MB"],
+   row: e => [hhmm(e.ts), e.name, e.kind, String(e.size_mb)],
+   stats: s => [["RUNS", String(s.runs ?? 0), "total"],
+     ["LIVE RUNS", String(s.live_runs ?? 0), "log writing now"],
+     ["CHECKPOINTS", String(s.checkpoints ?? 0), ".pt files"],
+     ["DISK GB", String(s.size_gb ?? 0), "checkpoint storage"]],
+   foot: () => "Newest first — run liveness from loss.jsonl mtime (<120s = live)."},
+];
+
+function renderStream(def, s) {
+  const key = def.key;
+  if(!s || !s.ok) return streamDown(key, s && s.error);
+  const badge = $(key + "-badge");
+  if(key === "inference") {
+    const live = s.freshness === "LIVE";
+    badge.textContent = live ? "LIVE" : "FILE";
+    badge.classList.toggle("good", live);
+  } else {
+    badge.textContent = "LIVE";
+    badge.classList.add("good");
+  }
+  statCards(key + "-stats", def.stats(s.stats || {}));
+  const feed = $(key + "-feed");
+  feed.replaceChildren();
+  (s.events || []).forEach(e => {
+    const rowKey = def.rowKey ? def.rowKey(e)
+      : key + ":" + (e.id || e.name || e.ts_epoch_ms || "");
+    feed.append(tr(def.row(e), rowKey));
+  });
+  const n = $(key + "-notice");
+  n.classList.remove("error");
+  n.textContent = def.foot ? def.foot(s.stats || {}) : "";
 }
 
 function highlightRow(key) {
@@ -434,9 +471,8 @@ function highlightRow(key) {
 function renderActivity(payload) {
   activityPayload = payload;
   $("activity-updated-at").textContent = String(payload.updated_at || "").replace("T", " ").slice(0, 19);
-  renderInference(payload.inference || {ok: false, error: "missing"});
-  renderTools(payload.tools || {ok: false, error: "missing"});
-  renderMemory(payload.memory || {ok: false, error: "missing"});
+  PANEL_DEFS.forEach(def =>
+    renderStream(def, payload[def.key] || {ok: false, error: "missing"}));
   if(typeof drawMap === "function") drawMap(payload.map || {nodes: [], links: []});
   const n = $("activity-notice"); n.classList.remove("error");
   n.textContent = "Three streams · click a node in the map to inspect the event behind it.";

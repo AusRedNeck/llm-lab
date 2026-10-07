@@ -58,7 +58,7 @@
       <section id="activity-view" class="view hidden">
         <div class="page-head"><div><p class="eyebrow">AGENT ACTIVITY / STREAMS</p><h1>Activity map</h1><p class="subhead">Inference, tool calls, and memory access — one canvas, three feeds.</p></div><div class="updated">UPDATED <b id="activity-updated-at">—</b></div></div>
         <section class="panel map-panel">
-          <div class="panel-head"><div><p class="eyebrow">NEURAL MAP</p><h2>Stream topology</h2></div><span class="chart-key"><b class="lime"></b> inference <b class="orange"></b> tools <b class="cyan"></b> memory</span></div>
+          <div class="panel-head"><div><p class="eyebrow">NEURAL MAP</p><h2>Stream topology</h2></div><span class="chart-key"><b class="lime"></b> inference <b class="orange"></b> tools <b class="cyan"></b> memory <b class="purple"></b> cron <b class="red"></b> kanban <b class="blue"></b> mesh <b class="gold"></b> models</span></div>
           <div class="map-wrap"><canvas id="activity-map" aria-label="Activity neural map"></canvas><aside id="map-inspector" class="map-inspector"><p class="eyebrow">INSPECTOR</p><p class="subhead small">Click a node to inspect the event behind it.</p></aside></div>
         </section>
         <div class="activity-grid">
@@ -79,6 +79,30 @@
             <div id="memory-stats" class="stats compact-stats"></div>
             <div class="table-wrap"><table><thead><tr><th>TIME</th><th>TIER</th><th>MEMORY</th><th>RECALLS</th></tr></thead><tbody id="memory-feed"></tbody></table></div>
             <p id="memory-notice" class="notice small">Recent and most-recalled memories.</p>
+          </section>
+          <section class="panel" id="cron-panel">
+            <div class="panel-head"><div><p class="eyebrow">CRON</p><h2>Scheduled jobs</h2></div><span class="badge" id="cron-badge">—</span></div>
+            <div id="cron-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>JOB</th><th>STATUS</th><th>DELIVERY</th></tr></thead><tbody id="cron-feed"></tbody></table></div>
+            <p id="cron-notice" class="notice small">Latest executions.</p>
+          </section>
+          <section class="panel" id="kanban-panel">
+            <div class="panel-head"><div><p class="eyebrow">KANBAN</p><h2>Task board</h2></div><span class="badge" id="kanban-badge">—</span></div>
+            <div id="kanban-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>EVENT</th><th>TASK</th><th>ASSIGNEE</th></tr></thead><tbody id="kanban-feed"></tbody></table></div>
+            <p id="kanban-notice" class="notice small">Task events.</p>
+          </section>
+          <section class="panel" id="mesh-panel">
+            <div class="panel-head"><div><p class="eyebrow">MESH</p><h2>Peer boxes</h2></div><span class="badge" id="mesh-badge">—</span></div>
+            <div id="mesh-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>PEER</th><th>STATE</th><th>LAT ms</th></tr></thead><tbody id="mesh-feed"></tbody></table></div>
+            <p id="mesh-notice" class="notice small">Peer health.</p>
+          </section>
+          <section class="panel" id="models-panel">
+            <div class="panel-head"><div><p class="eyebrow">MODELS</p><h2>What we're making</h2></div><span class="badge" id="models-badge">—</span></div>
+            <div id="models-stats" class="stats compact-stats"></div>
+            <div class="table-wrap"><table><thead><tr><th>TIME</th><th>CHECKPOINT</th><th>KIND</th><th>SIZE MB</th></tr></thead><tbody id="models-feed"></tbody></table></div>
+            <p id="models-notice" class="notice small">Checkpoints and run liveness.</p>
           </section>
         </div>
       </section>

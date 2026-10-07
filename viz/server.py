@@ -86,10 +86,18 @@ class ActivityStore:
     ~44ms measured; a 10s TTL keeps the UI's 5s poll cheap.
     """
 
-    def __init__(self, state_db=None, hfm_db=None, mnemo_db=None, ttl_s=10):
+    def __init__(self, state_db=None, hfm_db=None, mnemo_db=None,
+                 cron_db=None, jobs_json=None, kanban_db=None, peers=None,
+                 runs_dir=None, ckpt_dir=None, ttl_s=10):
         self.state_db = state_db or STATE_DB
         self.hfm_db = hfm_db or HFM_DB
         self.mnemo_db = mnemo_db or MNEMO_DB
+        self.cron_db = cron_db
+        self.jobs_json = jobs_json
+        self.kanban_db = kanban_db
+        self.peers = peers
+        self.runs_dir = runs_dir
+        self.ckpt_dir = ckpt_dir
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
         self._payload = None
@@ -99,9 +107,12 @@ class ActivityStore:
         with self._lock:
             now = time.time()
             if self._payload is None or now - self._built_at > self.ttl_s:
-                self._payload = collect_activity(hfm_path=self.hfm_db,
-                                                 state_path=self.state_db,
-                                                 mnemo_path=self.mnemo_db)
+                self._payload = collect_activity(
+                    hfm_path=self.hfm_db, state_path=self.state_db,
+                    mnemo_path=self.mnemo_db, cron_path=self.cron_db,
+                    jobs_path=self.jobs_json, kanban_path=self.kanban_db,
+                    peers=self.peers, runs_dir=self.runs_dir,
+                    ckpt_dir=self.ckpt_dir)
                 self._built_at = now
             return self._payload
 
@@ -124,13 +135,19 @@ def dashboard_summary(payload):
 
 def create_server(host="127.0.0.1", port=8787, *, runs_dir=None,
                   experiments_file=None, ui_dir=None, inference_service=None,
-                  state_db=None, hfm_db=None, mnemo_db=None):
+                  state_db=None, hfm_db=None, mnemo_db=None,
+                  cron_db=None, jobs_json=None, kanban_db=None, peers=None,
+                  lab_runs=None, lab_ckpt=None):
     """Create, but do not start, a local dashboard server (use port=0 in tests)."""
     runs_dir = Path(runs_dir or LAB_ROOT / "runs").resolve()
     experiments_file = Path(experiments_file or LAB_ROOT / "experiments.json").resolve()
     ui_dir = Path(ui_dir or Path(__file__).with_name("ui")).resolve()
     store = DashboardStore(runs_dir, experiments_file)
-    activity_store = ActivityStore(state_db=state_db, hfm_db=hfm_db, mnemo_db=mnemo_db)
+    activity_store = ActivityStore(state_db=state_db, hfm_db=hfm_db,
+                                   mnemo_db=mnemo_db, cron_db=cron_db,
+                                   jobs_json=jobs_json, kanban_db=kanban_db,
+                                   peers=peers, runs_dir=lab_runs,
+                                   ckpt_dir=lab_ckpt)
     if inference_service is None:
         from viz.inference_service import InferenceService
         inference_service = InferenceService(project_root=LAB_ROOT,

@@ -44,6 +44,10 @@ def test_default_shell_has_two_workspaces():
     assert 'id="inference-panel"' in html
     assert 'id="tools-panel"' in html
     assert 'id="memory-panel"' in html
+    assert 'id="cron-panel"' in html
+    assert 'id="kanban-panel"' in html
+    assert 'id="mesh-panel"' in html
+    assert 'id="models-panel"' in html
 
 
 def test_dashboard_payload_reuses_run_and_arm_summaries(tmp_path):
@@ -220,7 +224,13 @@ def test_activity_api_serves_streams_and_degrades(tmp_path):
     server = create_server(port=0, runs_dir=runs, experiments_file=exp,
                            hfm_db=_make_hfm_db(tmp_path),
                            state_db=_make_state_db(tmp_path),
-                           mnemo_db=_make_mnemo_db(tmp_path))
+                           mnemo_db=_make_mnemo_db(tmp_path),
+                           cron_db=tmp_path / "no-cron.db",
+                           jobs_json=tmp_path / "no-jobs.json",
+                           kanban_db=tmp_path / "no-kanban.db",
+                           peers=[],
+                           lab_runs=tmp_path / "no-runs",
+                           lab_ckpt=tmp_path / "no-ckpts")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -231,22 +241,31 @@ def test_activity_api_serves_streams_and_degrades(tmp_path):
         assert payload["inference"]["ok"] is True
         assert payload["tools"]["ok"] is True
         assert payload["memory"]["ok"] is True
-        pods = [n["id"] for n in payload["map"]["nodes"] if n["kind"] == "pod"]
-        assert pods == ["pod:inference", "pod:tools", "pod:memory"]
+        pods = {n["id"] for n in payload["map"]["nodes"] if n["kind"] == "pod"}
+        # file-backed streams injected above are healthy; cron/kanban/models
+        # were pointed at missing paths (degraded, no pod); mesh has no peers
+        assert pods == {"pod:inference", "pod:tools", "pod:memory", "pod:mesh"}
         # a dead source must not 500 — it degrades its own stream
         server2 = create_server(port=0, runs_dir=runs, experiments_file=exp,
                                 state_db=tmp_path / "missing.db",
                                 hfm_db=tmp_path / "missing2.db",
-                                mnemo_db=tmp_path / "missing3.db")
+                                mnemo_db=tmp_path / "missing3.db",
+                                cron_db=tmp_path / "missing4.db",
+                                jobs_json=tmp_path / "missing5.json",
+                                kanban_db=tmp_path / "missing6.db",
+                                peers=[],
+                                lab_runs=tmp_path / "missing-runs",
+                                lab_ckpt=tmp_path / "missing-ckpts")
         thread2 = threading.Thread(target=server2.serve_forever, daemon=True)
         thread2.start()
         try:
             degraded = json.loads(urlopen(
                 f"http://127.0.0.1:{server2.server_port}/api/activity").read())
-            assert degraded["inference"]["ok"] is False
-            assert degraded["tools"]["ok"] is False
-            assert degraded["memory"]["ok"] is False
-            assert degraded["map"]["nodes"] == []
+            for stream in ("inference", "tools", "memory", "cron", "kanban", "models"):
+                assert degraded[stream]["ok"] is False, stream
+            pods = {n["stream"] for n in degraded["map"]["nodes"] if n["kind"] == "pod"}
+            assert pods <= {"mesh"}
+            assert degraded["map"]["links"] == []
         finally:
             server2.shutdown()
             server2.server_close()

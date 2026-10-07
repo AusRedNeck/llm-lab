@@ -16,6 +16,6 @@ button,select{font:inherit;color:inherit}button{cursor:pointer}.app-shell{displa
 .map-inspector{border-left:1px solid var(--line);padding:4px 0 4px 14px;font-size:11px;color:#c9c4d6;min-width:0}
 .map-inspector .kv{margin:8px 0;overflow-wrap:anywhere;line-height:1.5}
 .map-inspector .kv b{color:var(--muted);font-size:9px;letter-spacing:.1em;display:block;margin-bottom:2px}
-.chart-key .cyan{background:#78d9d1}
+.chart-key .cyan{background:#78d9d1}.chart-key .purple{background:#a98be8}.chart-key .red{background:#f47b83}.chart-key .blue{background:#7fb3e8}.chart-key .gold{background:#e8d17f}
 tr.row-flash td{background:#c5ef701a}
 @media(max-width:1000px){.activity-grid{grid-template-columns:1fr}.map-wrap{grid-template-columns:1fr}.map-inspector{border-left:0;border-top:1px solid var(--line);padding:12px 0 0}}

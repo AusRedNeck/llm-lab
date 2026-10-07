@@ -5,8 +5,9 @@ import time
 
 import pytest
 
-from viz.activity import (collect_activity, collect_inference,
-                          collect_memory, collect_tools)
+from viz.activity import (collect_activity, collect_cron, collect_inference,
+                          collect_kanban, collect_memory, collect_mesh,
+                          collect_models, collect_tools)
 
 
 # ---------------------------------------------------------------- fixtures
@@ -165,17 +166,160 @@ def test_memory_collector_missing_file_degrades(tmp_path):
     assert payload["ok"] is False and payload["events"] == []
 
 
+# ---------------------------------------------------------------- cron
+def _make_cron_db(root):
+    path = root / "executions.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE executions (id TEXT, job_id TEXT, status TEXT,"
+                " started_at TEXT, finished_at TEXT, error TEXT, delivery_outcome TEXT)")
+    con.executemany("INSERT INTO executions VALUES (?,?,?,?,?,?,?)", [
+        ("e1", "job1", "completed", "2026-10-07T14:00:28-07:00", "2026-10-07T14:00:38-07:00", None, "suppressed"),
+        ("e2", "job1", "failed", "2026-10-07T13:00:28-07:00", None, "boom", None),
+        ("e3", "job2", "completed", "2026-10-07T12:00:28-07:00", "2026-10-07T12:00:30-07:00", None, "delivered"),
+    ])
+    con.execute("CREATE TABLE cron_incidents (id TEXT, closed_at TEXT)")
+    con.execute("INSERT INTO cron_incidents VALUES ('i1', NULL)")
+    con.execute("INSERT INTO cron_incidents VALUES ('i2', '2026-10-06T00:00:00-07:00')")
+    con.commit(); con.close()
+    jobs = root / "jobs.json"
+    jobs.write_text(json.dumps({"jobs": [
+        {"id": "job1", "name": "Daily news"},
+        {"id": "job2", "name": "Weekly digest"},
+    ]}), encoding="utf-8")
+    return path, jobs
+
+
+def test_cron_collector_maps_names_and_stats(tmp_path):
+    db, jobs = _make_cron_db(tmp_path)
+    payload = collect_cron(path=db, jobs_path=jobs)
+    assert payload["ok"] is True
+    assert [e["id"] for e in payload["events"]] == ["e3", "e2", "e1"]  # rowid DESC
+    assert payload["events"][1]["job"] == "Daily news"
+    assert payload["events"][1]["status"] == "failed"
+    assert payload["events"][1]["error"] == "boom"
+    stats = payload["stats"]
+    assert stats["total"] == 3 and stats["failed"] == 1
+    assert stats["open_incidents"] == 1
+    assert stats["by_status"] == {"completed": 2, "failed": 1}
+
+
+def test_cron_collector_missing_db_degrades(tmp_path):
+    payload = collect_cron(path=tmp_path / "nope.db", jobs_path=tmp_path / "nope.json")
+    assert payload["ok"] is False and payload["events"] == []
+
+
+# ---------------------------------------------------------------- kanban
+def _make_kanban_db(root):
+    path = root / "kanban.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE tasks (id TEXT, title TEXT, status TEXT, assignee TEXT)")
+    con.executemany("INSERT INTO tasks VALUES (?,?,?,?)", [
+        ("t1", "Ship the dashboard", "done", "engineering"),
+        ("t2", "Write copy", "in_progress", "marketing"),
+        ("t3", "Old thing", "archived", None),
+    ])
+    con.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT,"
+                " run_id INTEGER, kind TEXT, payload TEXT, created_at REAL)")
+    con.executemany("INSERT INTO task_events VALUES (?,?,?,?,?,?)", [
+        (1, "t1", 10, "completed", "{}", 1791400000.0),
+        (2, "t2", 11, "started", "{}", 1791400500.0),
+    ])
+    con.commit(); con.close()
+    return path
+
+
+def test_kanban_collector_reads_events_and_status_counts(tmp_path):
+    payload = collect_kanban(path=_make_kanban_db(tmp_path))
+    assert payload["ok"] is True
+    assert [e["kind"] for e in payload["events"]] == ["started", "completed"]
+    assert payload["events"][0]["title"] == "Write copy"
+    assert payload["events"][0]["assignee"] == "marketing"
+    stats = payload["stats"]
+    assert stats["total_tasks"] == 3
+    assert stats["open"] == 1  # done + archived are not open
+    assert stats["by_status"] == {"done": 1, "in_progress": 1, "archived": 1}
+
+
+def test_kanban_collector_missing_db_degrades(tmp_path):
+    payload = collect_kanban(path=tmp_path / "gone.db")
+    assert payload["ok"] is False and payload["events"] == []
+
+
+# ---------------------------------------------------------------- mesh
+def test_mesh_collector_no_peers_is_healthy_but_empty():
+    payload = collect_mesh(peers=[])
+    assert payload["ok"] is True
+    assert payload["stats"] == {"up": 0, "total": 0}
+
+
+def test_mesh_collector_unreachable_peer_is_an_event_not_an_error():
+    payload = collect_mesh(peers=[("dead", "http://127.0.0.1:1")], timeout=0.3)
+    assert payload["ok"] is True
+    assert payload["stats"]["up"] == 0
+    event = payload["events"][0]
+    assert event["ok"] is False and event["error"]
+
+
+# ---------------------------------------------------------------- models
+def _make_models_dirs(root):
+    runs = root / "runs"
+    (runs / "run_live").mkdir(parents=True)
+    (runs / "run_live" / "loss.jsonl").write_text("{}\n", encoding="utf-8")
+    (runs / "run_old").mkdir()
+    (runs / "run_old" / "loss.jsonl").write_text("{}\n", encoding="utf-8")
+    old = time.time() - 3600
+    import os
+    os.utime(runs / "run_old" / "loss.jsonl", (old, old))
+    ckpts = root / "checkpoints"
+    ckpts.mkdir()
+    (ckpts / "exp1_best.pt").write_bytes(b"x" * 2048)
+    (ckpts / "exp1_step900.pt").write_bytes(b"x" * 1024)
+    return runs, ckpts
+
+
+def test_models_collector_lists_checkpoints_and_run_liveness(tmp_path):
+    runs, ckpts = _make_models_dirs(tmp_path)
+    payload = collect_models(runs_dir=runs, ckpt_dir=ckpts)
+    assert payload["ok"] is True
+    names = [e["name"] for e in payload["events"]]
+    assert set(names) == {"exp1_best.pt", "exp1_step900.pt"}
+    kinds = {e["name"]: e["kind"] for e in payload["events"]}
+    assert kinds["exp1_best.pt"] == "best" and kinds["exp1_step900.pt"] == "step"
+    stats = payload["stats"]
+    assert stats["runs"] == 2 and stats["live_runs"] == 1
+    assert stats["checkpoints"] == 2
+
+
+def test_models_collector_missing_dirs_degrade(tmp_path):
+    payload = collect_models(runs_dir=tmp_path / "r", ckpt_dir=tmp_path / "c")
+    assert payload["ok"] is False and payload["events"] == []
+    # but an existing, empty checkpoints dir is honest zeros, not an error
+    empty = tmp_path / "c3"
+    empty.mkdir()
+    healthy = collect_models(runs_dir=tmp_path / "r", ckpt_dir=empty)
+    assert healthy["ok"] is True and healthy["stats"]["checkpoints"] == 0
+
+
 # ---------------------------------------------------------------- aggregate
 def test_collect_activity_assembles_map_and_never_raises(tmp_path):
+    cron_db, jobs_json = _make_cron_db(tmp_path)
+    runs, ckpts = _make_models_dirs(tmp_path)
     payload = collect_activity(hfm_path=_make_hfm_db(tmp_path),
                                state_path=_make_state_db(tmp_path),
-                               mnemo_path=_make_mnemo_db(tmp_path))
+                               mnemo_path=_make_mnemo_db(tmp_path),
+                               cron_path=cron_db, jobs_path=jobs_json,
+                               kanban_path=_make_kanban_db(tmp_path),
+                               peers=[("self", "http://127.0.0.1:1")],
+                               runs_dir=runs, ckpt_dir=ckpts)
     assert payload["panel_error"] is None
-    for key in ("inference", "tools", "memory", "map", "updated_at"):
+    for key in ("inference", "tools", "memory", "cron", "kanban", "mesh",
+                "models", "map", "updated_at"):
         assert key in payload
     nodes, links = payload["map"]["nodes"], payload["map"]["links"]
     pod_ids = [n["id"] for n in nodes if n["kind"] == "pod"]
-    assert set(pod_ids) == {"pod:inference", "pod:tools", "pod:memory"}
+    assert set(pod_ids) == {f"pod:{name}" for name in
+                            ("inference", "tools", "memory", "cron",
+                             "kanban", "mesh", "models")}
     # every event node links back to a pod (directly or via a session hub)
     node_ids = {n["id"] for n in nodes}
     link_pairs = {(l["source"], l["target"]) for l in links}
@@ -192,8 +336,15 @@ def test_collect_activity_assembles_map_and_never_raises(tmp_path):
 def test_collect_activity_with_all_sources_missing_still_returns(tmp_path):
     payload = collect_activity(hfm_path=tmp_path / "a.db",
                                state_path=tmp_path / "b.db",
-                               mnemo_path=tmp_path / "c.db")
-    assert payload["inference"]["ok"] is False
-    assert payload["tools"]["ok"] is False
-    assert payload["memory"]["ok"] is False
-    assert payload["map"]["nodes"] == [] and payload["map"]["links"] == []
+                               mnemo_path=tmp_path / "c.db",
+                               cron_path=tmp_path / "d.db",
+                               jobs_path=tmp_path / "e.json",
+                               kanban_path=tmp_path / "f.db",
+                               peers=[], runs_dir=tmp_path / "r",
+                               ckpt_dir=tmp_path / "c2")
+    for stream in ("inference", "tools", "memory", "cron", "kanban", "models"):
+        assert payload[stream]["ok"] is False, stream
+    # only mesh can be healthy with no files (it probes configured peers; none here)
+    pods = {n["stream"] for n in payload["map"]["nodes"] if n["kind"] == "pod"}
+    assert pods <= {"mesh"}
+    assert payload["map"]["links"] == []

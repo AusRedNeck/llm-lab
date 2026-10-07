@@ -69,19 +69,29 @@ or conflicting inference state, and 500 for unexpected failures.
 ## Activity workspace
 
 The third rail view ("Activity") answers *what is the agent doing right now* —
-one neural-map canvas plus three feed panels:
+one neural-map canvas plus seven feed panels:
 
 - **Inference** — model calls from the HFM routing proxy (`request_log`).
 - **Tool calls** — invocation/result pairs from Hermes `state.db`
   (`messages` joined to `sessions` for profile/session titles).
 - **Memory access** — recent and most-recalled Mnemosyne memories, plus
   consolidation and graph stats.
+- **Cron** — recent executions from `cron/executions.db` (job names joined
+  from `cron/jobs.json`) plus open-incident count.
+- **Kanban** — `task_events` joined to `tasks` from `hermes/kanban.db`, plus
+  board status counts.
+- **Mesh** — live `/health` probes of `config.yaml`'s `bot_peers` (0.4s
+  timeout; a sleeping box reads DOWN, which is correct, not an error).
+- **Models** — the checkpoints we are making: `checkpoints/*.pt` newest
+  first, run liveness from `runs/*/loss.jsonl` mtime (<120s = live).
 
-All three are **read-only SQLite sources** with independent degradation: a
-missing or locked DB marks its own stream `OFFLINE` and never fails the
-payload (`GET /api/activity` always returns 200 with per-stream `ok` flags).
-Sources are machine-local and overridable by env: `HFM_DB`,
-`HERMES_STATE_DB`, `MNEMOSYNE_DB`.
+All sources are **read-only** (SQLite or file stat) with independent
+degradation: a missing or locked source marks its own stream `OFFLINE` and
+never fails the payload (`GET /api/activity` always returns 200 with
+per-stream `ok` flags). Sources are machine-local and overridable by env:
+`HFM_DB`, `HERMES_STATE_DB`, `MNEMOSYNE_DB`, `HERMES_CRON_DB`,
+`HERMES_JOBS_JSON`, `HERMES_KANBAN_DB`, `HERMES_CONFIG`, `LLM_LAB_RUNS`,
+`LLM_LAB_CHECKPOINTS`.
 
 Honesty caveats baked into the UI:
 
@@ -97,11 +107,16 @@ inspector and scroll-highlights its feed row. The animation pauses when the
 view is hidden; the server caches the payload for 10s (state.db is written
 constantly, so a mtime-signature cache would rebuild on every poll).
 
-**Extension point (Phase 2):** to add a stream — cron runs, kanban, mesh
-DMs — write a collector in `viz/activity.py` returning the same
-degraded-safe shape (`{ok, error, events, stats}`), add it to
-`collect_activity()` and `_build_map()`, then add one panel + renderer. The
-per-source degradation and the map wiring both come for free.
+**The registry:** the Phase-2 refactor landed — panels are config, not
+code. Adding a stream takes three steps: (1) write a collector in
+`viz/activity.py` returning the degraded-safe shape `{ok, error, events,
+stats}`; (2) add its entry to `collect_activity()`'s `jobs` dict and a
+`POD_LABELS` key; (3) add one `PANEL_DEFS` entry in `viz/ui/app.js`
+(columns, row mapper, stats cards) plus the matching panel markup in
+`index.html`. Per-source degradation, the map pod, row-key highlight, and
+the feed rendering all come from the registry. The mesh collector is the
+only one that does network I/O — keep its timeout under a second because it
+runs inside the shared 10s TTL cache.
 
 ## Architecture and constraints
 
@@ -129,6 +144,7 @@ python -m pytest -q
 ```
 
 The API and inference paths have focused tests in `tests/test_activity.py`
-(activity collectors, map assembly, degradation), `tests/test_viz_server.py`,
+(all seven activity collectors, map assembly, per-source degradation),
+`tests/test_viz_server.py`,
 `tests/test_inference_service.py`, `tests/test_inference_tokenizer.py`, and
 `tests/test_trace.py`.
