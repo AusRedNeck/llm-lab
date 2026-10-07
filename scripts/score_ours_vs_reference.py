@@ -51,6 +51,29 @@ import val_fixture  # noqa: E402
 SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
 REF_REPORT = os.path.join(LAB, "reports", "pythia70m_reference.json")
 LEGACY_BPT = 3.9104      # the OLD tail's bytes/token; --source slice only
+OURS_TOKENS = 2_003_992_003
+PYTHIA_TOK_STEP = 2048 * 1024
+
+
+def reference_tokens(ref_dir: str) -> tuple[int, str]:
+    """(tokens_seen, label) for a Pythia snapshot dir.
+
+    The suite ships 143 step branches; an unversioned dir like pythia70m_weights
+    IS the final 143000-step checkpoint (299.9B tokens). Quoting its gap against
+    a 2B-token run as a quality verdict is the exact error that produced the
+    superseded "+18.7% behind", so the report states the denominator itself.
+    """
+    import re
+    name = os.path.basename(os.path.normpath(ref_dir))
+    # search, not fullmatch: this repo's dirs are pythia70m_step1000 /
+    # pythia160m_step1000, and a fullmatch there silently fell through to
+    # "final" -- labelling a 2B-token checkpoint as a 299.9B one (caught by
+    # tests/test_val_fixture.py the first time it ran).
+    m = re.search(r"step(\d+)", name)
+    if m:
+        step = int(m.group(1))
+        return step * PYTHIA_TOK_STEP, f"step{step}"
+    return 143000 * PYTHIA_TOK_STEP, "final (step143000, unversioned snapshot)"
 
 
 def _logits(model, bt, is_hf):
@@ -189,6 +212,7 @@ def main():
            "cache": cache_bin, "cache_desc": val_fixture.describe(cache_bin, meta, a.val_frac),
            "seed": a.seed, "batches": a.batches, "batch": a.batch,
            "ctx": a.ctx, "bytes_per_token": round(bpt, 6), "device": dev,
+           "ours_tokens": OURS_TOKENS,
            "val_bpb_from_train_log": ck.get("val_bpb")}
 
     print("\n=== ours (this lab's checkpoint, same harness) ===")
@@ -204,6 +228,18 @@ def main():
         res["reference_rerun"] = score_ids(ref, ids, a.batches, a.batch, a.ctx,
                                            a.seed, dev, "reference", is_hf=True,
                                            bpt=bpt)
+        ref_tokens, ref_label = reference_tokens(a.reference)
+        res["reference_rerun"]["tokens_seen"] = ref_tokens
+        res["reference_rerun"]["revision"] = ref_label
+        ratio = ref_tokens / OURS_TOKENS
+        res["comparability"] = (
+            f"TOKEN-MATCHED ({ratio:.3f}x): ours {OURS_TOKENS:,} vs reference "
+            f"{ref_tokens:,} -- the gap is a like-for-like quality gap"
+            if abs(ratio - 1.0) <= 0.10 else
+            f"NOT TOKEN-MATCHED ({ratio:.0f}x): ours {OURS_TOKENS:,} vs reference "
+            f"{ref_tokens:,} ({ref_label}). The gap measures distance to a FINISHED "
+            f"model, not quality at equal training -- never quote it as a verdict. "
+            f"Use scripts/score_matched_tokens.py for that.")
 
     stored = None
     if os.path.exists(REF_REPORT):
@@ -218,6 +254,10 @@ def main():
         print(f"  pythia-70m  {r:.4f}   (re-scored here)")
         print(f"  gap         {ours_bpb - r:+.4f} bpb  = {100*(ours_bpb/r - 1):+.1f}% worse")
         print(f"  trainer's own val_bpb for this ckpt: {res['val_bpb_from_train_log']}")
+        print("  ^ NOT a verdict: the default reference is pythia-70m's FINAL")
+        print("    checkpoint (299.9B tokens, 150x our 2.004B). It answers")
+        print("    'how far is a finished model from ours', not 'are we ahead'.")
+        print("    For the matched-token verdict run score_matched_tokens.py.")
     if stored:
         print(f"  stored reference {stored:.4f} | ours {ours_bpb:.4f} -> {ours_bpb - stored:+.4f}")
         print("  NOTE: if stored and re-scored differ, the stored number came from a")

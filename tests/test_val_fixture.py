@@ -112,6 +112,23 @@ def test_encoder_comes_from_the_sidecar(tmp_path):
         val_fixture.encoder_path({"vocab": str(tmp_path / "nope.json")})
 
 
+def test_reference_tokens_states_the_denominator():
+    """An unversioned snapshot dir IS the final 143000-step checkpoint.
+
+    The report must say so, because a 299.9B-token denominator measured against
+    a 2B-token run is how "+18.7% behind" happened the first time.
+    """
+    from score_ours_vs_reference import reference_tokens
+    tok, label = reference_tokens(
+        os.path.join(ROOT, "data", "incoming", "pythia70m_weights"))
+    assert tok == 143000 * 2048 * 1024
+    assert "final" in label
+    tok2, label2 = reference_tokens(
+        os.path.join(ROOT, "data", "incoming", "pythia160m_step1000"))
+    assert tok2 == 1000 * 2048 * 1024
+    assert label2 == "step1000"
+
+
 def test_trainer_bpt_matches_the_trainer_recipe():
     """bytes/token must be measured, not carried over between tails.
 

@@ -9,6 +9,7 @@
   "ctx": 512,
   "bytes_per_token": 3.87428,
   "device": "cuda",
+  "ours_tokens": 2003992003,
   "val_bpb_from_train_log": null,
   "ours": {
     "nll_per_token_nats": 3.816653,
@@ -18,7 +19,10 @@
   "reference_rerun": {
     "nll_per_token_nats": 3.178569,
     "bpb": 1.183628,
-    "tokens_scored": 245760
+    "tokens_scored": 245760,
+    "tokens_seen": 299892736000,
+    "revision": "final (step143000, unversioned snapshot)"
   },
+  "comparability": "NOT TOKEN-MATCHED (150x): ours 2,003,992,003 vs reference 299,892,736,000 (final (step143000, unversioned snapshot)). The gap measures distance to a FINISHED model, not quality at equal training -- never quote it as a verdict. Use scripts/score_matched_tokens.py for that.",
   "reference_stored": 1.183628
 }
