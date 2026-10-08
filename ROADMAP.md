@@ -126,6 +126,19 @@ then one watchdog tick: `DIRECT LAUNCH pid=62412 resume=step7000`, ledger inheri
 a declared lever, so the arm's lever is untouched; the run's single loss.jsonl header
 still reads 0.15 (written at launch) while the live trainer runs 0.30.
 
+**Found while verifying it — a resume restarts the RNG.** `torch.manual_seed(0)` runs at
+process start (`train/train.py:589`) and the seed is not checkpointed, but the model and
+optimizer are. So the resumed run continues the *weights* from step 7000 while replaying
+the seed-0 draw sequence from the top — batches and eval windows alike. The post-resume
+evals at identical step numbers came in 0.15–0.20 bpb **below** the pre-kill ones (7100:
+1.5626 → 1.3554; 7200: 1.5219 → 1.3686), and step 7400 — the exact step the old guard
+would have aborted on — set a new best **1.3480**, moving the tripwire to 1.7524. Two
+consequences worth keeping: step-matched comparisons **across a resume boundary are not
+like-for-like** (which is why the LR bracket compared two *fresh* runs — both seeded at 0,
+bit-identical step-1 loss — rather than a run against its own continuation), and every
+later crash-restart replays the same early draws again. Held-out val is unaffected: the
+split is positional (train 3204.3M / val 32.4M).
+
 Still open: an **optional 6e-4 rung** (~1h45m), since 5e-4 is the best rung *tested*
 rather than a proven optimum (Pythia's raw 160M peak is 6e-4) — run it after the
 full run lands, not instead of it.
