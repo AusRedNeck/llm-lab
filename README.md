@@ -107,20 +107,20 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-07 23:36 from `runs/*/loss.jsonl` + `experiments.json`, git `b9f1e8c`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-08 07:25 from `runs/*/loss.jsonl` + `experiments.json`, git `0810c98`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
 | Rank | Run | bpb | @ step | Tokens seen | Params |
 |------|-----|-----|--------|-------------|--------|
-| 1 | `20260930_2055_pythia_tokenizer_pile_train_full` ⭐ | **1.4033** | 13400 | 1.76B | 70.7M |
-| 2 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
-| 3 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
-| 4 | `20261006_2350_pythia160_tokenizer_pile_train_full` | **1.5876** | 1800 | 236M | 162.7M |
-| 5 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
-| 6 | `20260929_2159_pythia_tokenizer_pile_train_full` | **2.0132** | 4000 | 66M | 70.7M |
+| 1 | `20261007_2312_pythia160_tokenizer_pile_train_full` ⭐ | **1.3773** | 2800 | 367M | 162.7M |
+| 2 | `20260930_2055_pythia_tokenizer_pile_train_full` | **1.4033** | 13400 | 1.76B | 70.7M |
+| 3 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
+| 4 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
+| 5 | `20261006_2350_pythia160_tokenizer_pile_train_full` | **1.5876** | 1800 | 236M | 162.7M |
+| 6 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
 
-_Slices are separate. `20260930_2055_pythia_tokenizer_pile_train_full` scored against `data/pile_train_full.txt` — do not rank it against a run from another slice._
+_Slices are separate. `20261007_2312_pythia160_tokenizer_pile_train_full` scored against `data/pile_train_full.txt` — do not rank it against a run from another slice._
 
 ### Best on OpenWebText
 
@@ -147,7 +147,7 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 | Run | last step | best bpb | tokens |
 |-----|-----------|----------|--------|
-| `20261007_2312_pythia160_tokenizer_pile_train_full` | 318 | 2.1254 | 39M |
+| `20261007_2312_pythia160_tokenizer_pile_train_full` | 7035 | 1.3773 | 367M |
 
 ### Registry — 30 arms
 

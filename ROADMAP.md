@@ -112,6 +112,20 @@ What the launch actually did — the log reads like two runs because it is:
   bpb**, hit at our step 16,000 (131,072 × 16,000 = 2,097,152,000 tokens, the
   anchor, keeper-protected).
 
+**Guard widened 2026-10-08 07:23 — `--degrade-frac` 0.15 → 0.30.** By step 7,300 the
+val envelope had been climbing for 4,400 steps (best 1.3797 @2300; peaks
+1.5366 → 1.5542 → 1.5751) while train loss kept falling and LR was still 4.1e-4 — the
+pattern above, which says 0.15 stops the 160M before annealing. At 0.15 the abort line
+was 1.3797 × 1.15 = **1.5867** and the projected step-7400 peak (~1.596) would have
+ended the run 30% in. Killed the trainer at step 7363 (no abort had fired), rewrote
+`train_job.json` by hand (arm.py refuses an unfinished job), **backdated the spec mtime
+to the 23:00 arm time — `newest_step_ckpt()` floors its glob on spec mtime, so a fresh
+mtime would have made every checkpoint invisible and silently restarted from zero** —
+then one watchdog tick: `DIRECT LAUNCH pid=62412 resume=step7000`, ledger inherited
+(best 1.3797), run dir reused. New abort line 1.793. `degrade-frac` is a guard arg, not
+a declared lever, so the arm's lever is untouched; the run's single loss.jsonl header
+still reads 0.15 (written at launch) while the live trainer runs 0.30.
+
 Still open: an **optional 6e-4 rung** (~1h45m), since 5e-4 is the best rung *tested*
 rather than a proven optimum (Pythia's raw 160M peak is 6e-4) — run it after the
 full run lands, not instead of it.
