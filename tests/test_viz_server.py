@@ -50,6 +50,11 @@ def test_default_shell_has_two_workspaces():
     assert 'id="models-panel"' in html
     assert 'id="gap-chart"' in html
     assert 'id="map-pause"' in html
+    assert 'id="neuro-view"' in html
+    assert 'id="neuro-map"' in html
+    assert 'id="neuro-inspect"' in html
+    assert 'id="neuro-pause"' in html
+    assert 'id="neuro-inspector"' in html
 
 
 def test_dashboard_payload_reuses_run_and_arm_summaries(tmp_path):

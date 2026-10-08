@@ -123,6 +123,29 @@ the feed rendering all come from the registry. The mesh collector is the
 only one that does network I/O — keep its timeout under a second because it
 runs inside the shared 10s TTL cache.
 
+## Neuro workspace (model topology)
+
+The fourth rail view ("Neuro") draws a loaded checkpoint as a living circuit —
+the Oct-5 plan's Part A: **layer pods** (teal rings), **block hubs** (green,
+radius scales with hidden norm), **head somata** (orange, radius = peak
+attention, edge thickness = concentration), **FFN somata** (red, radius =
+activation RMS), and **residual synapses** (dashed gold, layer to layer). All
+numbers come from one opt-in `/api/trace` pass (the same payload the Think
+workbench renders as bars) — the map is another view of that trace, not a
+second capture path.
+
+- Self-serve: prompt + INSPECT in the view; FOCUS TOKEN re-reads the trace
+  client-side (arrays are per-token already — no re-capture).
+- **Open-weights models work today** via Think's `hf:` checkpoints: those
+  backends omit FFN internals, so FFN somata render as dashed "not exposed"
+  outlines and the notice says so — honest absence over fake values.
+- **Cloud models**: provider APIs expose no activation data; a future adapter
+  could feed static architecture metadata only. Interface = `buildNeuro(trace)`
+  — anything producing the same `{layers:[attention_by_head, hidden_norms, ...]}`
+  shape plugs straight in.
+- Pause/drift toggle in the panel head; animation pauses when the view is
+  hidden. Attention is a routing measurement, not causal proof.
+
 ## Architecture and constraints
 
 - `viz/server.py` serves the static UI and JSON API using the Python standard

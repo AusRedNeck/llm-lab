@@ -15,6 +15,7 @@
       <button class="nav active" data-view="training"><span>◫</span> Training <i>LIVE</i></button>
       <button class="nav" data-view="think"><span>◉</span> Think <i>READY</i></button>
       <button class="nav" data-view="activity"><span>◈</span> Activity <i>LIVE</i></button>
+      <button class="nav" data-view="neuro"><span>✦</span> Neuro <i>BETA</i></button>
       <div class="rail-footer"><span class="pulse"></span> LOCAL MACHINE<br><small>offline-capable · private</small></div>
     </aside>
     <main>
@@ -106,6 +107,16 @@
             <p id="models-notice" class="notice small">Checkpoints and run liveness.</p>
           </section>
         </div>
+      </section>
+      <section id="neuro-view" class="view hidden">
+        <div class="page-head"><div><p class="eyebrow">MODEL TOPOLOGY / TRACE</p><h1>Neuro map</h1><p class="subhead">Our checkpoints — and any open-weights model Think can load — drawn as a living circuit: layer pods, block hubs, head and FFN somata.</p></div><div class="badge" id="neuro-badge">CHECKING MODEL</div></div>
+        <section class="panel map-panel">
+          <div class="panel-head"><div><p class="eyebrow">STRUCTURE</p><h2 id="neuro-title">No inspection yet</h2></div><span class="chart-key"><b class="cyan"></b> layer pod <b class="lime"></b> block hub <b class="orange"></b> heads <b class="red"></b> FFN <b class="gold"></b> residual</span><button id="neuro-pause" class="action secondary">PAUSE</button></div>
+          <label class="field prompt-field">PROMPT<textarea id="neuro-prompt" rows="2" maxlength="4000">Once upon a time</textarea></label>
+          <div class="control-row"><label class="field">FOCUS TOKEN<select id="neuro-token" disabled></select></label><button id="neuro-inspect" class="action" disabled>INSPECT PROMPT</button></div>
+          <div class="map-wrap"><canvas id="neuro-map" aria-label="Model structure neural map"></canvas><aside id="neuro-inspector" class="map-inspector"><p class="eyebrow">INSPECTOR</p><p class="subhead small">Click a node to read its trace numbers.</p></aside></div>
+          <p id="neuro-notice" class="notice">Opt-in on-demand forward pass — attention is a routing measurement, not causal proof.</p>
+        </section>
       </section>
       <footer>LLM LAB <span>·</span> local measurements, no mystery meat telemetry</footer>
     </main>

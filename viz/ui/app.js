@@ -8,7 +8,9 @@ document.querySelectorAll(".nav").forEach(button => button.addEventListener("cli
   $("training-view").classList.toggle("hidden", viewName !== "training");
   $("think-view").classList.toggle("hidden", viewName !== "think");
   $("activity-view").classList.toggle("hidden", viewName !== "activity");
+  $("neuro-view").classList.toggle("hidden", viewName !== "neuro");
   $("crumb-view").textContent = viewName.toUpperCase();
+  if(viewName === "neuro") refreshNeuroStatus();
   if(viewName === "think") {
     if(!thinkReady) loadThink();
     else refreshThinkStatus();
@@ -652,5 +654,241 @@ $("activity-map").addEventListener("click", ev => {
   if(!node) return;
   if(mapState) mapState.selected = node;
   mapInspect(node);
+});
+
+/* ---------------- Neuro map (model topology from /api/trace) ----------------
+   Oct-5 plan Part A: layer -> teal pod, block -> green hub, heads/FFN ->
+   orange/red somata, residual stream -> dashed gold synapse. Node sizes scale
+   with real trace numbers (hidden norm, attention concentration, FFN RMS).
+   Open-weights backends omit FFN internals — those somata render as dashed
+   "not exposed" outlines instead of pretending to a value. */
+const neuroColor = {pod:"#78d9d1", hub:"#8fe388", head:"#ffae68", ffn:"#f47b83", resid:"#e8d17f"};
+let neuroTrace = null, neuroState = null, neuroAnim = null, neuroPaused = false, neuroCheckpoint = null;
+
+async function refreshNeuroStatus() {
+  try {
+    const state = await api("/api/model/status");
+    const badge = $("neuro-badge");
+    if(state.loaded) {
+      neuroCheckpoint = state.checkpoint_id || null;
+      badge.textContent = state.checkpoint_id || "MODEL LOADED";
+      badge.classList.add("good");
+      $("neuro-inspect").disabled = false;
+      $("neuro-notice").textContent = "Opt-in on-demand forward pass — attention is a routing measurement, not causal proof.";
+      $("neuro-notice").classList.remove("error");
+    } else {
+      badge.textContent = "NO MODEL LOADED";
+      badge.classList.remove("good");
+      $("neuro-inspect").disabled = true;
+      $("neuro-notice").textContent = "Load a checkpoint in Think first — the neuro map renders one opt-in trace of whatever model is resident.";
+      $("neuro-notice").classList.add("error");
+    }
+  } catch(error) {
+    $("neuro-notice").textContent = `Think workbench unavailable: ${error.message}`;
+    $("neuro-notice").classList.add("error");
+  }
+}
+
+function neuroEntropy(values) {
+  const total = values.reduce((a, b) => a + b, 0);
+  if(!total) return 1;
+  const h = -values.reduce((a, p) => a + (p > 0 ? (p / total) * Math.log(p / total) : 0), 0);
+  return Math.min(1, Math.max(0, h / Math.log(values.length || 2)));  // normalized entropy: 0 = flat, 1 = peaked
+}
+
+function buildNeuro(trace, focus) {
+  const layers = trace.layers || [];
+  if(!layers.length) return null;
+  const nodes = [], links = [];
+  const allAtt = layers.flatMap(l => (l.attention_by_head || []).map(h => Math.max(...h)));
+  const attMax = Math.max(...allAtt, 1e-9);
+  const hiddenAll = layers.map(l => (l.hidden_norms || [])[focus] ?? 0);
+  const hiddenMax = Math.max(...hiddenAll, 1e-9);
+  const gels = layers.map(l => l.ffn_activation_rms ? l.ffn_activation_rms[focus] : null);
+  const gelMax = Math.max(...gels.filter(v => v != null), 1e-9);
+  layers.forEach((layer, i) => {
+    const fx = 0.08 + (layers.length > 1 ? i * 0.84 / (layers.length - 1) : 0.42);
+    const pod = {id: "pod" + i, kind: "pod", fx, fy: 0.5, r: 15, label: "L" + (i + 1),
+                 data: {layer: i + 1, hidden_norm: layer.hidden_norms?.[focus],
+                        attention_delta: layer.attention_delta_norms?.[focus],
+                        ffn_delta: layer.ffn_delta_norms?.[focus],
+                        ffn_activation_rms: gels[i]}};
+    nodes.push(pod);
+    const hub = {id: "hub" + i, kind: "hub", fx, fy: 0.40, phase: i,
+                 r: 6 + 9 * ((layer.hidden_norms?.[focus] ?? 0) / hiddenMax),
+                 data: {layer: i + 1, hidden_norm: layer.hidden_norms?.[focus]}};
+    nodes.push(hub);
+    links.push({source: hub.id, target: pod.id, kind: "synapse"});
+    const heads = layer.attention_by_head || [];
+    heads.forEach((row, h) => {
+      const angle = -Math.PI / 2 + (heads.length > 1 ? h * 2 * Math.PI / heads.length : 0);
+      const att = row[focus] ?? 0;
+      const conc = neuroEntropy(row);      // 0 flat … 1 peaked
+      const head = {id: "h" + i + "_" + h, kind: "head",
+                    fx: fx + Math.cos(angle) * 0.045, fy: 0.40 + Math.sin(angle) * 0.075,
+                    phase: i * 3 + h,
+                    r: 3.5 + 6 * (Math.max(...row) / attMax),
+                    data: {layer: i + 1, head: h, attention_to_focus: att,
+                           concentration: conc, focus_token: trace.tokens?.[focus]}};
+      nodes.push(head);
+      links.push({source: hub.id, target: head.id, kind: "synapse", weight: conc});
+    });
+    const ffn = {id: "ffn" + i, kind: "ffn", fx, fy: 0.74, phase: i * 7,
+                 r: gels[i] == null ? 7 : 5 + 8 * (gels[i] / gelMax),
+                 dashed: gels[i] == null,
+                 data: {layer: i + 1, ffn_activation_rms: gels[i],
+                        ffn_delta: layer.ffn_delta_norms?.[focus],
+                        exposed: gels[i] != null}};
+    nodes.push(ffn);
+    links.push({source: hub.id, target: ffn.id, kind: "synapse", weight: ffn.dashed ? 0 : 1});
+    if(i > 0) links.push({source: "pod" + (i - 1), target: "pod" + i, kind: "residual"});
+  });
+  return {nodes, links};
+}
+
+function neuroLayout() {
+  const canvas = $("neuro-map"), box = canvas.getBoundingClientRect();
+  if(!box.width || !box.height) return null;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(box.width * dpr);
+  canvas.height = Math.round(box.height * dpr);
+  return {canvas, ctx: canvas.getContext("2d"), w: box.width, h: box.height, dpr,
+          hover: null, selected: null};
+}
+
+function neuroPaint(st, graph, t) {
+  const {ctx, w, h, dpr} = st;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const at = {};
+  graph.nodes.forEach(n => {
+    const wob = neuroPaused ? 0 : 1;
+    n._x = n.fx * w + Math.sin(t / 900 + (n.phase || 0)) * 3 * wob;
+    n._y = n.fy * h + Math.cos(t / 1100 + (n.phase || 0)) * 3 * wob;
+    at[n.id] = n;
+  });
+  graph.links.forEach(l => {
+    const a = at[l.source], b = at[l.target];
+    if(!a || !b) return;
+    if(l.kind === "residual") { ctx.setLineDash([6, 6]); ctx.strokeStyle = neuroColor.resid + "66"; ctx.lineWidth = 2; }
+    else { ctx.setLineDash([3, 5]); ctx.strokeStyle = neuroColor.pod + "30"; ctx.lineWidth = 0.8 + (l.weight || 0) * 1.6; }
+    ctx.beginPath(); ctx.moveTo(a._x, a._y); ctx.lineTo(b._x, b._y); ctx.stroke();
+    ctx.setLineDash([]);
+  });
+  graph.nodes.forEach(n => {
+    const color = neuroColor[n.kind];
+    const sel = st.selected === n, hov = st.hover === n;
+    ctx.beginPath(); ctx.arc(n._x, n._y, n.r + (sel ? 3 : 0), 0, Math.PI * 2);
+    if(n.kind === "pod") { ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke(); }
+    else if(n.dashed) { ctx.setLineDash([3, 3]); ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.stroke(); ctx.setLineDash([]); }
+    else { ctx.fillStyle = color + (hov || sel ? "ff" : "cc"); ctx.fill(); ctx.strokeStyle = color + "55"; ctx.lineWidth = 1; ctx.stroke(); }
+    if(n.kind === "pod" || hov || sel) {
+      ctx.fillStyle = hov || sel ? "#efeef5" : "#c9c4d6";
+      ctx.font = n.kind === "pod" ? "600 11px ui-sans-serif" : "10px ui-sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(n.kind === "pod" ? n.label : String(n.label || n.id), n._x, n._y + n.r + 12);
+    }
+  });
+}
+
+function neuroFrame() {
+  if(viewName !== "neuro" || !neuroState || !neuroState.graph || !neuroTrace) { neuroAnim = null; return; }
+  neuroPaint(neuroState, neuroState.graph, performance.now());
+  neuroAnim = window.requestAnimationFrame(neuroFrame);
+}
+
+function neuroEventAt(ev) {
+  if(!neuroState) return null;
+  const box = neuroState.canvas.getBoundingClientRect();
+  const x = ev.clientX - box.left, y = ev.clientY - box.top;
+  let best = null, bestD = 625;   // ~25px capture radius — somata are small, maps are for clicking
+  (neuroState.graph?.nodes || []).forEach(n => {
+    const d = (n._x - x) ** 2 + (n._y - y) ** 2;
+    if(d < Math.max(bestD, (n.r + 6) ** 2)) { bestD = d; best = n; }
+  });
+  return best;
+}
+
+function neuroInspectNode(node) {
+  const box = $("neuro-inspector");
+  box.replaceChildren();
+  const eye = document.createElement("p"); eye.className = "eyebrow";
+  const kindName = {pod: "LAYER POD", hub: "BLOCK HUB", head: "HEAD SOMA", ffn: "FFN SOMA"}[node.kind] || node.kind;
+  eye.textContent = kindName + (node.data?.layer ? " · LAYER " + node.data.layer : "");
+  box.append(eye);
+  const d = node.data || {};
+  const rows = node.kind === "head"
+    ? [["head", d.head], ["attn → focus", d.attention_to_focus?.toFixed(4)], ["concentration", d.concentration?.toFixed(3)], ["focus token", d.focus_token]]
+    : node.kind === "ffn"
+      ? [["ffn activation rms", d.exposed ? d.ffn_activation_rms?.toFixed(4) : "not exposed by this backend"], ["ffn delta ‖·‖", d.ffn_delta?.toFixed(4) ?? "—"]]
+      : [["hidden ‖h‖", d.hidden_norm?.toFixed(4) ?? "—"], ["attention delta", d.attention_delta?.toFixed(4) ?? "—"],
+         ["ffn delta", d.ffn_delta?.toFixed(4) ?? "—"], ["ffn activation rms", d.ffn_activation_rms?.toFixed(4) ?? "—"]];
+  rows.forEach(([k, v]) => {
+    const kv = document.createElement("div"); kv.className = "kv";
+    const key = document.createElement("b"); key.textContent = k;
+    const val = document.createElement("span"); val.textContent = v == null ? "—" : String(v);
+    kv.append(key, val); box.append(kv);
+  });
+}
+
+function renderNeuro(trace) {
+  neuroTrace = trace;
+  const focus = Number($("neuro-token").value || trace.selected_index || 0);
+  const graph = buildNeuro(trace, focus);
+  neuroState = neuroLayout();
+  if(neuroState && graph) {
+    neuroState.graph = graph;
+    if(!neuroAnim) neuroAnim = window.requestAnimationFrame(neuroFrame);
+  } else {
+    $("neuro-notice").textContent = "Trace carried no layers — nothing to draw.";
+    $("neuro-notice").classList.add("error");
+  }
+  $("neuro-title").textContent = `${neuroCheckpoint || "model"} · ${trace.capture_kind} · ${trace.layers?.length || 0} layers`;
+}
+
+$("neuro-inspect").addEventListener("click", async () => {
+  const button = $("neuro-inspect");
+  button.disabled = true; button.textContent = "CAPTURING…";
+  $("neuro-notice").textContent = "Running one bounded, opt-in forward pass…";
+  $("neuro-notice").classList.remove("error");
+  try {
+    const trace = await postJSON("/api/trace", {prompt: $("neuro-prompt").value, max_context: 128});
+    const tokens = $("neuro-token");
+    tokens.replaceChildren();
+    trace.tokens.forEach((tok, index) => {
+      const option = document.createElement("option");
+      option.value = index; option.textContent = `${index}: ${tok || "∅"} [${trace.token_ids[index]}]`;
+      tokens.append(option);
+    });
+    tokens.value = String(trace.selected_index);
+    tokens.disabled = false;
+    renderNeuro(trace);
+    $("neuro-notice").textContent = trace.capture_kind.includes("open-weights")
+      ? `${neuroCheckpoint || "model"} · open-weights backend — attention and hiddens only; FFN somata show as dashed "not exposed".`
+      : `${neuroCheckpoint || "model"} · ${trace.capture_kind}. Attention is a routing measurement, not causal proof.`;
+  } catch(error) {
+    $("neuro-notice").textContent = error.message;
+    $("neuro-notice").classList.add("error");
+  } finally {
+    button.disabled = false; button.textContent = "INSPECT PROMPT";
+    await refreshNeuroStatus().catch(() => {});
+  }
+});
+$("neuro-token").addEventListener("change", () => { if(neuroTrace) renderNeuro(neuroTrace); });
+$("neuro-pause").addEventListener("click", () => {
+  neuroPaused = !neuroPaused;
+  $("neuro-pause").textContent = neuroPaused ? "RESUME" : "PAUSE";
+});
+$("neuro-map").addEventListener("mousemove", ev => {
+  const node = neuroEventAt(ev);
+  if(neuroState) neuroState.hover = node;
+  ev.currentTarget.style.cursor = node ? "pointer" : "crosshair";
+});
+$("neuro-map").addEventListener("mouseleave", () => { if(neuroState) neuroState.hover = null; });
+$("neuro-map").addEventListener("click", ev => {
+  const node = neuroEventAt(ev);
+  if(!node) return;
+  if(neuroState) neuroState.selected = node;
+  neuroInspectNode(node);
 });
 
