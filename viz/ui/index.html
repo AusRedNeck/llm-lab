@@ -29,6 +29,7 @@
           <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">LEARNING</p><h2>Loss in bits / byte</h2></div><span class="chart-key"><b class="lime"></b> train avg <b class="orange"></b> validation</span></div><canvas id="loss-chart" aria-label="Training and validation loss chart"></canvas></article>
           <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">STABILITY</p><h2>Gradient &amp; activations</h2></div><span class="chart-key">grad · logit · entropy</span></div><canvas id="stability-chart" aria-label="Training stability chart"></canvas></article>
           <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">DATA PIPELINE</p><h2>Served vs random-train</h2></div><span class="chart-key">loader health</span></div><canvas id="loader-chart" aria-label="Loader health chart"></canvas></article>
+          <article class="panel chart-card"><div class="panel-head"><div><p class="eyebrow">OVERFIT</p><h2>Memorization gap — train − tval</h2></div><span class="chart-key">gap <b class="red"></b> rises = memorizing</span></div><canvas id="gap-chart" aria-label="Train minus train-on-val loss gap chart"></canvas></article>
           <article class="panel runs-card"><div class="panel-head"><div><p class="eyebrow">EXPERIMENT REGISTRY</p><h2>Arms &amp; verdicts</h2></div><span id="problem-count" class="badge">0 CHECKS</span></div><div id="arms-table" class="table-wrap"></div></article>
         </div>
         <p id="notice" class="notice" role="status">Reading local run logs…</p>
@@ -58,7 +59,7 @@
       <section id="activity-view" class="view hidden">
         <div class="page-head"><div><p class="eyebrow">AGENT ACTIVITY / STREAMS</p><h1>Activity map</h1><p class="subhead">Inference, tool calls, and memory access — one canvas, three feeds.</p></div><div class="updated">UPDATED <b id="activity-updated-at">—</b></div></div>
         <section class="panel map-panel">
-          <div class="panel-head"><div><p class="eyebrow">NEURAL MAP</p><h2>Stream topology</h2></div><span class="chart-key"><b class="lime"></b> inference <b class="orange"></b> tools <b class="cyan"></b> memory <b class="purple"></b> cron <b class="red"></b> kanban <b class="blue"></b> mesh <b class="gold"></b> models</span></div>
+          <div class="panel-head"><div><p class="eyebrow">NEURAL MAP</p><h2>Stream topology</h2></div><span class="chart-key"><b class="lime"></b> inference <b class="orange"></b> tools <b class="cyan"></b> memory <b class="purple"></b> cron <b class="red"></b> kanban <b class="blue"></b> mesh <b class="gold"></b> models</span><button id="map-pause" class="action secondary">PAUSE</button></div>
           <div class="map-wrap"><canvas id="activity-map" aria-label="Activity neural map"></canvas><aside id="map-inspector" class="map-inspector"><p class="eyebrow">INSPECTOR</p><p class="subhead small">Click a node to inspect the event behind it.</p></aside></div>
         </section>
         <div class="activity-grid">

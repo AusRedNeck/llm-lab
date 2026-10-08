@@ -67,6 +67,8 @@ function renderRun() {
   const loss=[];if(run?.bpb_factor)loss.push(line(run,"avg50",palette.lime,run.bpb_factor));loss.push(line(run,"val_bpb",palette.orange));
   draw("loss-chart",loss);draw("stability-chart",[line(run,"gnorm",palette.cyan),line(run,"lmax",palette.orange),line(run,"ent",palette.purple)]);
   draw("loader-chart",[line(run,"served",palette.cyan),line(run,"random_train",palette.red)]);
+  const gapPts=(run?.rows||[]).filter(r=>r.tval!=null&&r.train!=null).map(r=>[Number(r.tokens??r.step),r.train-r.tval]);
+  draw("gap-chart",[{color:palette.red,points:gapPts}]);
 }
 
 function renderArms() {
@@ -587,7 +589,7 @@ function mapPaint(st) {
 
 function mapFrame() {
   if(viewName !== "activity" || !mapState) { mapAnim = null; return; }
-  mapStep(mapState);
+  if(!mapState.paused) mapStep(mapState);
   mapPaint(mapState);
   mapAnim = window.requestAnimationFrame(mapFrame);
 }
@@ -625,10 +627,18 @@ function mapInspect(node) {
 }
 
 function drawMap(map) {
+  const wasPaused = mapState ? mapState.paused : false;  // survive the 5s rebuild
   mapState = mapLayout(map);
   if(!mapState) return;
+  mapState.paused = wasPaused;
+  $("map-pause").textContent = wasPaused ? "RESUME" : "PAUSE";
   if(!mapAnim) mapAnim = window.requestAnimationFrame(mapFrame);
 }
+$("map-pause").addEventListener("click", () => {
+  if(!mapState) return;
+  mapState.paused = !mapState.paused;
+  $("map-pause").textContent = mapState.paused ? "RESUME" : "PAUSE";
+});
 $("activity-map").addEventListener("mousemove", ev => {
   const node = mapEventAt(ev);
   const key = node ? node.id : null;

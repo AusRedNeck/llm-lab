@@ -48,6 +48,8 @@ def test_default_shell_has_two_workspaces():
     assert 'id="kanban-panel"' in html
     assert 'id="mesh-panel"' in html
     assert 'id="models-panel"' in html
+    assert 'id="gap-chart"' in html
+    assert 'id="map-pause"' in html
 
 
 def test_dashboard_payload_reuses_run_and_arm_summaries(tmp_path):
