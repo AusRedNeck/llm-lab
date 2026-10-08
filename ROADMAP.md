@@ -62,9 +62,9 @@ The API/UI architecture, routes, constraints, and usage are documented in
 [`VISUAL-OBSERVATORY.md`](VISUAL-OBSERVATORY.md). Verification: project test
 suite **178 passed, 2 skipped**.
 
-Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline; the 160M parity config was identified as next but has not been launched.
+Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline. **Launched 2026-10-07 23:00** as arm `p160-pile-parity-full`; what the launch actually did is in the *Launched* subsection below.
 
-### Pre-launch status (2026-10-06 evening)
+### Launch status (armed 2026-10-06, running 2026-10-07)
 
 Done and verified: the full 13.1GB Pile text is tokenized on the **real HF
 Pythia encoder** (`data/pile_train_full_bpe_pythia_hf.bin`, 3,236,695,626
@@ -84,9 +84,37 @@ for the parity run.** Full series and caveats:
 it: measured peak **8,982MB of 16,376MB**, so the plan's "EXTRAPOLATED —
 smoke it" question is answered.
 
-Still open before launch: the `viz/arm.py` launch spec for the 24,694-step run
-and — optional — a 6e-4 rung (~1h45m), since 5e-4 is the best rung *tested*
-rather than a proven optimum (Pythia's raw 160M peak is 6e-4).
+### Launched 2026-10-07 23:00 — the 24,694-step parity run
+
+`viz/arm.py` armed **`p160-pile-parity-full`**: pythia160 preset, lr 5e-4, micro 8
+× accum 32 (eff 131,072 tok/step), one full pass over
+`data/pile_train_full_bpe_pythia_hf.bin` = **24,694 steps**, guards on (degrade
+×1.15, saturation stop on a flat 25% of schedule), early stopping off
+(`--patience-frac 0`). Supervised by watchdog → schtasks `Hermes_TrainRun` →
+detached launcher, so an app restart cannot kill it. Row, lever, and running note:
+`experiments.json` → `p160-pile-parity-full`.
+
+What the launch actually did — the log reads like two runs because it is:
+
+- First launch (23:00) died at **step 47** after ~4 min. No checkpoint written and
+  no cause captured in `logs/p160-pile-parity-full.log`.
+- The watchdog relaunched at **23:12:44** (relaunch 1 of 6). With no step checkpoint
+  to resume from it started **fresh** in `runs/20261007_2312_pythia160_tokenizer_pile_train_full`
+  — step-1 loss 10.9683 is bit-identical to the LR probe's, so init and data order
+  match the rungs and LR is still the only lever. `runs/20261007_2300_...` is the
+  dead 47-step prefix; both dirs stay registered to the arm.
+- **Pace: 29,966 tok/s sustained** (the trainer's own steps 31–130 throughput
+  block) = 4.37 s/step → **~30h**, ETA early **2026-10-09**. The plan's 10–11h and
+  the job spec's own ~28h estimate were both short; neither applied the 2.3× FLOPs/token
+  to the 70M's measured 81k tok/s.
+- Peak GPU 8,982 / 16,376 MB. First three evals on the shared fixture: 2.5580 @100
+  → 2.2638 @200 → 2.1254 @300. Bar to beat: `pythia-160m@step1000` = **1.4614
+  bpb**, hit at our step 16,000 (131,072 × 16,000 = 2,097,152,000 tokens, the
+  anchor, keeper-protected).
+
+Still open: an **optional 6e-4 rung** (~1h45m), since 5e-4 is the best rung *tested*
+rather than a proven optimum (Pythia's raw 160M peak is 6e-4) — run it after the
+full run lands, not instead of it.
 
 **Checkpoint retention decided 2026-10-07 (Shane: "keep the best" + the
 reasons to keep more):** per run keep `_best` + the newest step (crash-resume

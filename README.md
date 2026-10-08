@@ -107,7 +107,7 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-07 02:18 from `runs/*/loss.jsonl` + `experiments.json`, git `52357e1`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-07 23:36 from `runs/*/loss.jsonl` + `experiments.json`, git `b9f1e8c`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
@@ -145,11 +145,13 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 ### In flight
 
-None. No curve has moved in the last 60 minutes. GPU is idle.
+| Run | last step | best bpb | tokens |
+|-----|-----------|----------|--------|
+| `20261007_2312_pythia160_tokenizer_pile_train_full` | 318 | 2.1254 | 39M |
 
-### Registry — 29 arms
+### Registry — 30 arms
 
-closed 11 · pass 9 · fail 8 · inconclusive 1
+closed 11 · pass 9 · fail 8 · inconclusive 1 · running 1
 
 Open arms (not `closed`):
 
@@ -165,6 +167,7 @@ Open arms (not `closed`):
 | `p160-lr-1e-3` | pythia160-lr-probe | **fail** | 160M LR probe rung. |
 | `p160-lr-5e-4` | pythia160-lr-probe | **pass** | 160M LR probe (1000 steps, eff64). |
 | `p160-pile-lr5e-4` | pile-160m-lr-probe | **pass** | LR bracket for the 160M Pile parity run (plan 2026-10-01: 'a 1-2k probe at 5e-4 vs 3e-4 should bracket it -... |
+| `p160-pile-parity-full` | pile-160m-parity | **running** | FULL 160M Pythia-parity run on the Pile: one epoch = 24,694 steps at eff 131,072 tok/step (micro 8 x accum ... |
 | `p50k-lr-15e-4` | pythia50k-70m-lr-probe | **pass** | 50k 70M LR probe; winner of the ladder. |
 | `p50k-lr-3e-3` | pythia50k-70m-lr-probe | **fail** | 50k 70M LR probe rung (bracket test). |
 | `pile-eff128k-5k` | pile-batch-knee | **pass** | Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m:... |

@@ -445,6 +445,22 @@
       "goal": "LR bracket for the 160M Pile parity run. Rung B: 3e-4, the batch-scaled Pythia number (their 160M peak 6e-4 at 16x our batch = 3.75e-4), at eff 131,072. Compare against p160-pile-lr5e-4 at matched steps.",
       "verdict": "closed",
       "note": "Launched 2026-10-06 23:50, FRESH start (spec mtime floors the ckpt glob, so p160-pile-lr5e-4's step2000 checkpoint cannot bleed in; step-1 loss 10.9683 is bit-identical to rung A's, so both rungs share init and data order and LR is the only differing lever). Same fixture, same eff 131,072, same 2000-step ceiling, warmup 200 then cosine to 10%. Decision rule: compare final-block (4-eval) means at matched steps; if the two overlap within the eval noise band, report inconclusive rather than pick. ||| RESULT 2026-10-07: completed 2000/2000, final-block mean 1.6204, raw best 1.5876 @1800, blocks 2.3222 -> 1.6204, gnorm max 1.689, no guard fired -- a CLEAN run, simply 0.159 bpb worse than 5e-4 at matched steps (3.1x eval noise). 3e-4 REJECTED for the parity run: linear batch scaling from Pythia's 2,097,152 tok/step (6e-4/16 = 3.75e-4) undershoots this stack, matching the 70M precedent (1e-3 scaled = 6.25e-4, we ran 5e-4 and won). Still descending at the ceiling, so this is a bracket reading, not a converged value. Verdict 'closed' per ladder convention: valid rung, not the winner."
+    },
+    {
+      "id": "p160-pile-parity-full",
+      "family": "pile-160m-parity",
+      "run_dirs": [
+        "20261007_2300_pythia160_tokenizer_pile_train_full",
+        "20261007_2312_pythia160_tokenizer_pile_train_full"
+      ],
+      "control_id": null,
+      "lever": {
+        "steps": "2000->24694 (bracket rung -> full epoch)",
+        "lr": "5e-4 (probe winner, held constant)"
+      },
+      "goal": "FULL 160M Pythia-parity run on the Pile: one epoch = 24,694 steps at eff 131,072 tok/step (micro 8 x accum 32 x ctx 512) over pile_train_full_bpe_pythia_hf.bin (3,236,695,626 tokens, 19.89 tok/param = 99.4% of Chinchilla-20). lr 5e-4 = winner of pile-160m-lr-probe (beat 3e-4 by 0.159 bpb at matched 2000 steps, 3.1x eval noise). Measured pace 4.0 s/step => ~28h, not the plan's 10-11h (the plan forgot to apply its own 2.3x FLOPs/token to the 70M's 81k tok/s). Anchor: step 16,000 is pythia-160m@step1000 exactly (131,072 x 16,000 = 2,097,152,000 tokens) and is keeper-protected. Bar to beat on the shared fixture: pythia-160m@step1000 = 1.4614 bpb.",
+      "verdict": "running",
+      "note": "Launched 2026-10-07 23:00 by viz/arm.py. First launch died at step 47 after ~4 min (no checkpoint written, no cause captured in logs/p160-pile-parity-full.log); watchdog relaunched 23:12:44 (relaunch 1 of max 6) and, having no step checkpoint to resume from, started FRESH in runs/20261007_2312_pythia160_tokenizer_pile_train_full -- step-1 loss 10.9683 is bit-identical to the LR probe's, so same init and same data order; runs/20261007_2300_... is the dead 47-step prefix. Live pid 59740, single trainer (the second matching python process is its child). MEASURED PACE corrects the goal's 4.0 s/step / ~28h: the trainer's own throughput block reports 29,966 tok/s over steps 31-130 = 4.37 s/step at eff 131,072 => ~30h to 24,694, ETA early 2026-10-09. Peak GPU 8,982/16,376MB. Early evals on the shared fixture: bpb 2.5580 @100 -> 2.2638 @200 (best ckpt exp002_pythia160_tokenizer_202610072312_best.pt). Bar to beat stays pythia-160m@step1000 = 1.4614 bpb at step 16,000."
     }
   ],
   "legacy_cutoff": "20260921",
