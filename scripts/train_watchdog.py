@@ -377,8 +377,18 @@ def finished_log(spec, st, spec_path=None):
                 continue
             with open(p, "rb") as f:
                 f.seek(max(0, os.path.getsize(p) - 8192))
-                if "done. final" in f.read().decode("utf-8", "replace"):
-                    return p
+                text = f.read().decode("utf-8", "replace")
+            if "done. final" not in text:
+                continue
+            # Completion is terminal only while it is still the LAST line. A deliberate
+            # relaunch (guard fixed, operator resumed) appends a fresh banner and step
+            # lines after the old one; reading that stale line as current would veto
+            # supervising the segment we chose to continue -- observed 2026-10-08 on
+            # p160-pile-parity-full, whose old "done. final" would have re-latched the
+            # job on the first tick after its relaunch.
+            last = text.rstrip().splitlines()
+            if last and last[-1].lstrip().startswith("done. final"):
+                return p
         except Exception:
             continue
     return None
@@ -398,7 +408,15 @@ def run_finished(spec, st, spec_path=None):
                     f.seek(max(0, os.path.getsize(lj) - 65536))
                     tail = f.read().decode("utf-8", "replace")
                 if '"early_stop": true' in tail:
-                    return True, "early-stop guard fired"
+                    # Terminal only if nothing has been trained since it. A relaunch
+                    # APPENDS rows after the marker, and the marker then describes a
+                    # segment the operator deliberately continued; obeying it anyway
+                    # latches the job forever and hides every later crash (observed
+                    # 2026-10-08: resumed at step 8500, stale marker still at 8900).
+                    lines = tail.splitlines()
+                    hit = max(i for i, l in enumerate(lines) if '"early_stop": true' in l)
+                    if not any('"step":' in l for l in lines[hit + 1:]):
+                        return True, "early-stop guard fired"
             except Exception:
                 pass
         step = curve_step(lj) if os.path.exists(lj) else None

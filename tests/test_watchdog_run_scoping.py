@@ -142,3 +142,65 @@ def test_unlaunched_job_is_never_reported_finished(tmp_path):
 
 def test_progress_step_is_none_not_a_foreign_step():
     assert w.progress_step(spec_with()) is None
+
+# --------------------------------- stale completion evidence after a resume
+# (the same shape of bug, opposite direction: evidence that WAS terminal and
+#  stopped being terminal the moment the operator deliberately continued)
+#
+# Observed 2026-10-08 on p160-pile-parity-full: stopped at step 8900 by the
+# saturation guard's false positive, resumed at 8500 after the guard was fixed.
+# The stale "early_stop": true row and the stale "done. final" log line were both
+# still on disk, so run_finished() would have re-latched the job on the first tick
+# after its own relaunch -- and every later crash would have been reported as
+# "final, latched - nothing to do". A marker is terminal only while it is the
+# last thing that happened.
+
+
+def test_completion_line_stops_being_terminal_once_training_resumes():
+    import datetime as _dt
+    logs = os.path.join(LAB, "logs")
+    if not os.path.isdir(logs):
+        pytest.skip("no logs dir in this checkout")
+    probe = os.path.join(logs, "_test_stale_done.log")
+    with open(probe, "w", encoding="utf-8") as f:
+        f.write("done. final avg50 loss=1.0\n")
+    try:
+        floor = _dt.datetime.fromtimestamp(os.path.getmtime(probe) - 60).isoformat()
+        st = {"last_launch": floor}
+        assert w.finished_log(spec_with(), st, None) == probe, \
+            "a log whose last line is completion must still count as finished"
+        # A relaunch appends a banner and step lines after it.
+        with open(probe, "a", encoding="utf-8") as f:
+            f.write("=== launch 2026-10-08 21:00:00 ===\nstep 8501/24694 loss=2.7\n")
+        assert w.finished_log(spec_with(), st, None) != probe, \
+            "completion is no longer the last thing in this log"
+    finally:
+        os.remove(probe)
+
+
+def test_stale_early_stop_marker_does_not_veto_a_resume(tmp_path, monkeypatch):
+    """Rows appended after the marker mean the run was continued on purpose."""
+    lj = tmp_path / "loss.jsonl"
+    lj.write_text(
+        '{"step": 8800, "val_bpb": 1.49}\n'
+        '{"early_stop": true, "step": 8900, "best_bpb": 1.348}\n'
+        '{"step": 8901, "val_bpb": 1.50}\n',
+        encoding="utf-8")
+    monkeypatch.setattr(w, "find_run_dir", lambda spec: str(tmp_path))
+    # a launch floor far in the future keeps any real log out of the verdict
+    st = {"last_launch": "2100-01-01T00:00:00"}
+    assert w.run_finished(spec_with(target_steps=24694), st, None)[0] is False
+
+
+def test_current_early_stop_marker_is_still_terminal(tmp_path, monkeypatch):
+    """The guard firing for real must still end the run -- that is its job."""
+    lj = tmp_path / "loss.jsonl"
+    lj.write_text(
+        '{"step": 8800, "val_bpb": 1.49}\n'
+        '{"early_stop": true, "step": 8900, "best_bpb": 1.348}\n',
+        encoding="utf-8")
+    monkeypatch.setattr(w, "find_run_dir", lambda spec: str(tmp_path))
+    st = {"last_launch": "2100-01-01T00:00:00"}
+    finished, why = w.run_finished(spec_with(target_steps=24694), st, None)
+    assert finished, "a marker with nothing after it must still be terminal"
+    assert "early-stop" in why
