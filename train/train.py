@@ -325,6 +325,54 @@ def get_batch(source: torch.Tensor | None, batch: int, ctx: int,
     return x, y
 
 
+def recycle_gap_trips(served_bpb, random_train_bpb, margin: float) -> bool:
+    """True when the served buffer beats random_train by more than `margin` bpb.
+
+    That gap is the recycling signature: a loader looping a small buffer hands the
+    model the same tokens again and again, so it scores them far better than a crop
+    drawn uniformly from the corpus. `margin` is a FLAG, not a magic number, because
+    the healthy baseline is not zero -- a model scores the tokens it was just
+    gradient-descended on about 0.13 bpb better than random train, measured across
+    this run (0.123 / 0.133 / 0.153 at steps 9100-9300 of p160-pile-parity-full).
+
+    The shipped default of 0.15 therefore sat 0.02 above that baseline and fired on a
+    healthy run at step 9400 on 2026-10-08, on a loader (get_batch -> torch.randint
+    over all 3.23B tokens) that cannot recycle at all. This arm runs at 0.30, twice
+    the measured healthy max; 0.30 is NOT calibrated against a positive control --
+    no run in this lab has ever produced one, because the loader cannot loop.
+
+    margin <= 0 disables the tripwire entirely (note the sign: 0 would otherwise mean
+    "trip whenever served is even slightly better", which is always).
+    """
+    if margin <= 0:
+        return False
+    if served_bpb is None or random_train_bpb is None:
+        return False
+    return served_bpb < random_train_bpb - margin
+
+
+def push_served(buffer: list, item, size: int) -> list:
+    """Rolling FIFO for the served-metric buffer: keep the LAST `size` items.
+
+    Why this exists (2026-10-08): SERVED_BUFFER_SIZE says "keep last 200 micro-batches",
+    but the training loop guarded the append with `if len(buffer) < size`, so the buffer
+    filled during the first ~6 optimizer steps of a process and froze there. served() was
+    therefore scoring the FIRST 200 micro-batches of a process forever -- and because a
+    resume replays seed 0 (torch.manual_seed(0) at process start), every relaunch
+    re-served byte-identical batches. Third exposure: served beat random_train by 0.16-0.22
+    bpb, two checks running, and the recycling tripwire stopped a healthy run at step 9400
+    on a loader that draws uniformly over the whole corpus and cannot recycle at all.
+
+    Rotation is also what makes that tripwire valid: served now means "what I was just
+    trained on", so a genuinely looping loader still shows a large gap while a uniform one
+    stays near zero (measured +0.01 bpb through the first 7,000 steps of this run).
+    """
+    buffer.append(item)
+    if len(buffer) > size:
+        buffer.pop(0)
+    return buffer
+
+
 def lr_schedule(step: int, warmup: int, total: int, peak: float) -> float:
     # Linear warmup, then cosine decay to 10% of peak.
     if step < warmup:
@@ -528,6 +576,11 @@ def main():
     ap.add_argument("--out", default="checkpoints")
     ap.add_argument("--val_every", type=int, default=100,
                     help="eval held-out loss every N steps (0 = off)")
+    ap.add_argument("--recycle-margin", type=float, default=0.15,
+                    help="served must beat random_train by this many bpb before the "
+                         "data-recycling tripwire counts a hit (2 hits stop the run). "
+                         "Healthy baseline is ~0.13 bpb -- the model scores what it just "
+                         "trained on. 0 disables the tripwire.")
     ap.add_argument("--dropout", type=float, default=None,
                     help="residual/attn dropout (default: preset cfg value)")
     ap.add_argument("--patience", type=int, default=0,
@@ -1012,9 +1065,10 @@ def _train(args):
                 loss = F.cross_entropy(logits.reshape(-1, cfg.vocab_size), y.reshape(-1)) / accum
             scaler.scale(loss).backward()
             micro_loss += loss.item()
-            # METRIC 2: buffer this micro-batch for three-way eval
-            if len(served_buffer) < SERVED_BUFFER_SIZE:
-                served_buffer.append((x.cpu(), y.cpu()))
+            # METRIC 2: buffer this micro-batch for three-way eval -- ROLLING, so
+            # served() scores the last 200 micro-batches (see push_served for why the
+            # fill-once version of this line ended a run).
+            push_served(served_buffer, (x.cpu(), y.cpu()), SERVED_BUFFER_SIZE)
 
         # METRIC 3: throughput tracking
         throughput_tokens += args.batch * accum * cfg.context_length
@@ -1069,7 +1123,7 @@ def _train(args):
             # bpb margin (fair across vocabs), consecutive hits (one noisy
             # check never kills a run -- the 160M smoke proved that).
             if step >= 100:
-                if served_bpb is not None and served_bpb < random_train_bpb - 0.15:
+                if recycle_gap_trips(served_bpb, random_train_bpb, args.recycle_margin):
                     recycle_hits += 1
                     if recycle_hits >= 2:
                         print(f"\n  !!! DATA RECYCLING DETECTED !!!")
