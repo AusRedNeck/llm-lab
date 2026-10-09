@@ -142,6 +142,22 @@ relaunch meant to prove it stale. Both markers must now be the LAST thing that
 happened, with `state.resume_requested` as a one-shot operator override (`b1dc7a5`).
 Resumed 21:24 from step 8500, ledger intact (best 1.3480), first eval back 1.3401.
 
+**Third stop, and the third verdict was also wrong (2026-10-08 22:29, step 9400, 8.5h
+idle).** The data-recycling tripwire stopped the run claiming "the loader is recycling
+data" -- on a loader that draws `torch.randint` uniformly over all 3.23B tokens and
+structurally cannot. Behind it: `served_buffer` guarded its append with `if len < 200`,
+so it froze at ~step 6 of every process (the comment says "keep last 200"), and a resume
+replays seed 0, so every relaunch re-served byte-identical micro-batches. Separately, the
+0.15 margin sat 0.02 above the healthy baseline -- "tokens I just trained on" beat a
+uniform train crop by ~0.13 bpb (measured -0.1230 / -0.1330 / -0.1527 / -0.1640 at steps
+9100-9400), so two consecutive evals were enough to end it. Fixed as instrumentation, not
+by disabling it (`6ef4acd`): the buffer rolls, the predicate is `recycle_gap_trips()`, and
+the margin is `--recycle-margin` (default 0.15; this arm runs 0.30 = 2x the measured
+healthy max, said out loud as uncalibrated -- no positive control is possible while the
+loader is uniform). Relaunch 6 of 10 is live from step 9000 with that flag on the command
+line; `max_restarts` was raised 6 -> 10 in the spec so the exhaustion cliff could not
+decide this mid-epoch.
+
 **Found while verifying it — a resume restarts the RNG.** `torch.manual_seed(0)` runs at
 process start (`train/train.py:589`) and the seed is not checkpointed, but the model and
 optimizer are. So the resumed run continues the *weights* from step 7000 while replaying

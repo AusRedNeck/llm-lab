@@ -107,13 +107,13 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-08 21:32 from `runs/*/loss.jsonl` + `experiments.json`, git `b1dc7a5`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-09 07:46 from `runs/*/loss.jsonl` + `experiments.json`, git `6ef4acd`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
 | Rank | Run | bpb | @ step | Tokens seen | Params |
 |------|-----|-----|--------|-------------|--------|
-| 1 | `20261007_2312_pythia160_tokenizer_pile_train_full` ⭐ | **1.3401** | 8600 | 1.13B | 162.7M |
+| 1 | `20261007_2312_pythia160_tokenizer_pile_train_full` ⭐ | **1.3080** | 9100 | 1.19B | 162.7M |
 | 2 | `20260930_2055_pythia_tokenizer_pile_train_full` | **1.4033** | 13400 | 1.76B | 70.7M |
 | 3 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
 | 4 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
@@ -147,7 +147,7 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 | Run | last step | best bpb | tokens |
 |-----|-----------|----------|--------|
-| `20261007_2312_pythia160_tokenizer_pile_train_full` | 8612 | 1.3401 | 1.13B |
+| `20261007_2312_pythia160_tokenizer_pile_train_full` | 9039 | 1.3080 | 1.19B |
 
 ### Registry — 30 arms
 
