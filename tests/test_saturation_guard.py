@@ -22,6 +22,9 @@ from train.train import envelope, flat_envelope_stop  # noqa: E402
 LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EPOCH = "20260930_2055_pythia_tokenizer_pile_train_full"
 PROBE = "20260930_0907_pythia_tokenizer_pile_train_full"
+# The run whose FALSE POSITIVE motivated the persistence rule (2026-10-08):
+# stopped at step 8900/24694 after one spike. Only present on this machine.
+LIVE = "20261007_2312_pythia160_tokenizer_pile_train_full"
 
 
 def curve(run_dir):
@@ -102,6 +105,24 @@ def main():
         print(f"  FAIL: guard fired at step {probe_hit[0]} on a healthy run")
         ok_neg = False
 
+    # --- the false positive the persistence rule exists to prevent ---
+    live = curve(LIVE)
+    if not live:
+        print("\n[20261007_2312 parity run] absent (runs/ is gitignored) - skipping")
+        ok_live = True
+    else:
+        live_hit = first_flat_step(live, window, delta, 24694, flat_frac, 100, 0)
+        print(f"\n[20261007_2312 parity run] {len(live)} evals, "
+              f"best {min(b for _, b in live):.5f}")
+        if live_hit is None:
+            print("  PASS: guard stayed silent - it stopped this run at step 8900 "
+                  "before the persistence fix")
+            ok_live = True
+        else:
+            print(f"  FAIL: guard fired at step {live_hit[0]} "
+                  f"(bpb {live_hit[1]:.4f}) on a run that was still learning")
+            ok_live = False
+
     # --- the sawtooth the envelope exists to absorb ---
     env, per = envelope([b for _, b in epoch[-16:]])
     raw = [b for _, b in epoch[-16:]]
@@ -112,8 +133,9 @@ def main():
     print(f"  envelope range {max(env) - min(env):.4f} "
           f"({(max(env) - min(env)) / max(1e-9, max(raw) - min(raw)):.0%} of raw range)")
 
-    print("\n" + ("ALL CHECKS PASS" if (ok_pos and ok_neg) else "CHECKS FAILED"))
-    return 0 if (ok_pos and ok_neg) else 1
+    print("\n" + ("ALL CHECKS PASS" if (ok_pos and ok_neg and ok_live)
+                    else "CHECKS FAILED"))
+    return 0 if (ok_pos and ok_neg and ok_live) else 1
 
 
 if __name__ == "__main__":

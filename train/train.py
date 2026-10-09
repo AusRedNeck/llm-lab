@@ -422,6 +422,36 @@ def envelope_min(evals_bpb: list, window: int) -> list:
     return [min(evals_bpb[i * w:(i + 1) * w]) for i in range(full)]
 
 
+def _flat_stall(evals_bpb: list, flat_delta: float, steps: int, flat_frac: float,
+                val_every: int) -> bool:
+    """ONE eval's opinion of "the envelope has stalled" -- never a stop decision by
+    itself. flat_envelope_stop() requires this to hold for two consecutive evals.
+
+    The test is anchored on the newest point of the series, which is the cheapest
+    statistic that tracks the curve's current level; on an unsmoothed series it answers
+    for one eval, so the caller supplies the persistence.
+    """
+    env, period = envelope(evals_bpb)
+    if period <= 1 or len(env) < 2:
+        # No detectable cycle: fall back to the raw series only if it is long enough to
+        # judge. A short, cycle-free series is not evidence of a stall.
+        if len(evals_bpb) < 8:
+            return False
+        env = list(evals_bpb)
+        period = 1
+    # How many ROUNDS of envelope fit inside the stall budget?
+    round_steps = max(1, period * max(1, val_every))
+    rounds_back = max(1, int(round(flat_frac * steps / round_steps)))
+    if rounds_back + 1 > len(env):
+        return False  # not enough history yet to judge a stall this long
+    newest = env[-1]
+    prior = env[-(rounds_back + 1):-1]
+    # Still improving if ANY round in the budget beat the newest by more than the delta.
+    if any(p > newest + flat_delta for p in prior):
+        return False
+    return True
+
+
 def flat_envelope_stop(evals_bpb: list, window: int, flat_delta: float,
                        step: int, steps: int, flat_frac: float,
                        val_every: int, min_step: int = 0) -> bool:
@@ -443,30 +473,34 @@ def flat_envelope_stop(evals_bpb: list, window: int, flat_delta: float,
 
     The stall must persist for `flat_frac` x steps so ordinary slow patches and a cooling
     cosine tail cannot trip it, and it never fires before `min_step`.
+
+    PERSISTENCE (2026-10-08): the statistic inside _flat_stall() is anchored on the
+    NEWEST point, so on the raw fallback it answers for one eval, not for a state. This
+    entry point requires the stall to hold for the current eval AND the one before it:
+    two evals must agree before a run is stopped.
+
+    Why that matters, from a real stop: the 160M Pile parity run (p160-pile-parity-full)
+    was stopped at step 8900/24694 after FOUR straight improving evals
+    (1.5566 -> 1.5426 -> 1.5095 -> 1.4933) followed by one spike, 1.5856, which was the
+    worst point of the trailing 62-eval window (prior max 1.5751). "No prior round was
+    worse than the newest" was true of that single point and of no state the curve was
+    actually in -- the curve had not stalled, the spike had. Period was 1 (raw fallback)
+    because that run's eval history is STITCHED across a resume, and a resume replays
+    seed-0 (torch.manual_seed(0) at process start) so the 5-eval sawtooth phase changed
+    and eval_cycle_length finds no consistent structure to unwrap.
+
+    Replayed on three real curves (tests/test_saturation_guard.py): the 70M full-epoch
+    run still fires, at step 13000 -> 13200, still before its true best at 13400; the
+    eff-128k 5k probe still never fires; the stitched 160M run no longer fires.
     """
     if flat_frac <= 0 or steps <= 0:
         return False
     if step < min_step:
         return False
-    env, period = envelope(evals_bpb)
-    if period <= 1 or len(env) < 2:
-        # No detectable cycle: fall back to the raw series only if it is long enough to
-        # judge. A short, cycle-free series is not evidence of a stall.
-        if len(evals_bpb) < 8:
-            return False
-        env = list(evals_bpb)
-        period = 1
-    # How many ROUNDS of envelope fit inside the stall budget?
-    round_steps = max(1, period * max(1, val_every))
-    rounds_back = max(1, int(round(flat_frac * steps / round_steps)))
-    if rounds_back + 1 > len(env):
-        return False  # not enough history yet to judge a stall this long
-    newest = env[-1]
-    prior = env[-(rounds_back + 1):-1]
-    # Still improving if ANY round in the budget beat the newest by more than the delta.
-    if any(p > newest + flat_delta for p in prior):
+    if len(evals_bpb) < 2:
         return False
-    return True
+    return (_flat_stall(evals_bpb, flat_delta, steps, flat_frac, val_every)
+            and _flat_stall(evals_bpb[:-1], flat_delta, steps, flat_frac, val_every))
 
 
 def main():
