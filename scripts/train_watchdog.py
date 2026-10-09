@@ -398,7 +398,18 @@ def run_finished(spec, st, spec_path=None):
     """True when the RUN ITSELF ended deliberately: its early-stop guard fired, it reached
     target_steps, or the trainer printed its completion line. This is a legitimate end state,
     NOT a crash -- treating it as 'dead' makes the watchdog relaunch a finished run, which then
-    aborts again (observed live 2026-09-18: the degrade guard fired at step 8200/20000)."""
+    aborts again (observed live 2026-09-18: the degrade guard fired at step 8200/20000).
+
+    An operator can override it: state["resume_requested"] is set when someone decides
+    a rule-stopped run should continue (guard fixed, arm reopened), and it is dropped the
+    moment a live trainer is observed -- so the override covers the resume itself and
+    cannot outlive it. Without this the verdict is unfalsifiable: the marker that stopped
+    the run is still the last row on disk until the resumed trainer appends past it, so
+    "finished" would veto the very relaunch that proves it stale (observed 2026-10-08 on
+    p160-pile-parity-full, stopped at step 8900 by a guard false positive).
+    """
+    if st.get("resume_requested"):
+        return False, "operator resume requested - verdict suspended until a trainer is alive"
     rd = find_run_dir(spec)
     if rd:
         lj = os.path.join(rd, "loss.jsonl")
@@ -584,6 +595,9 @@ def _main_locked():
         if not dry:
             st.update({"status": "running", "pid": proc_pid,
                        "checked_at": now.isoformat(timespec="seconds")})
+            # The resume happened: an operator override must not outlive the run it
+            # unblocked, or the next stop-by-rule would be silently overridden too.
+            st.pop("resume_requested", None)
             if st.get("watchdog_last_step") != step_now:
                 st["watchdog_last_step"] = step_now
                 st["watchdog_last_at"] = now.isoformat(timespec="seconds")

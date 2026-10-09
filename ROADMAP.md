@@ -126,6 +126,22 @@ then one watchdog tick: `DIRECT LAUNCH pid=62412 resume=step7000`, ledger inheri
 a declared lever, so the arm's lever is untouched; the run's single loss.jsonl header
 still reads 0.15 (written at launch) while the live trainer runs 0.30.
 
+**It was stopped anyway, by the other guard — and that one was wrong (2026-10-08).
+Degrade never fired (0 aborts), but the *saturation* guard stopped the run at step
+8900/24694 (36%) at 09:28, then sat dead 11.5h. False positive: for this run
+`eval_cycle_length` reports period 1 (the history is stitched across a resume, so the
+seed-0 sawtooth changed phase), `flat_envelope_stop` falls back to the raw series, and
+the test collapses to "is the newest eval the worst of the trailing 62" — 1.5856 was
+(prior max 1.5751) after four straight *improving* evals. Fixed properly rather than
+switched off: the guard now needs the stall on two consecutive evals (`030b762`),
+replayed on the three real curves (70M epoch still fires at 13200 vs true best 13400;
+5k probe still silent; this run silent). Resuming it then exposed a second defect:
+`run_finished()` latched on the `"early_stop": true` row and on the log's `done.
+final`, both of which survive a deliberate resume, so "finished" would have vetoed the
+relaunch meant to prove it stale. Both markers must now be the LAST thing that
+happened, with `state.resume_requested` as a one-shot operator override (`b1dc7a5`).
+Resumed 21:24 from step 8500, ledger intact (best 1.3480), first eval back 1.3401.
+
 **Found while verifying it — a resume restarts the RNG.** `torch.manual_seed(0)` runs at
 process start (`train/train.py:589`) and the seed is not checkpointed, but the model and
 optimizer are. So the resumed run continues the *weights* from step 7000 while replaying

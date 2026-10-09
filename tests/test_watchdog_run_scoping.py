@@ -204,3 +204,27 @@ def test_current_early_stop_marker_is_still_terminal(tmp_path, monkeypatch):
     finished, why = w.run_finished(spec_with(target_steps=24694), st, None)
     assert finished, "a marker with nothing after it must still be terminal"
     assert "early-stop" in why
+
+def test_operator_resume_override_suspends_the_verdict(tmp_path, monkeypatch):
+    """The marker that stopped a run cannot veto the relaunch proving it stale.
+
+    On the FIRST resume after a stop-by-rule there are no rows after the marker yet
+    (the resumed trainer is what appends them), so without an explicit override the
+    verdict is unfalsifiable: "finished" blocks the very relaunch that would falsify
+    it. state["resume_requested"] is that override, and main() drops it once a live
+    trainer is observed so it cannot outlive the resume it unblocked.
+    """
+    lj = tmp_path / "loss.jsonl"
+    lj.write_text(
+        '{"step": 8899, "val_bpb": 1.56}\n'
+        '{"step": 8900, "val_bpb": 1.58}\n'
+        '{"early_stop": true, "step": 8900, "best_bpb": 1.348}\n',
+        encoding="utf-8")
+    monkeypatch.setattr(w, "find_run_dir", lambda spec: str(tmp_path))
+    st = {"last_launch": "2100-01-01T00:00:00"}
+    spec = spec_with(target_steps=24694)
+    assert w.run_finished(spec, st, None)[0] is True, "marker with nothing after it is terminal"
+    st["resume_requested"] = True
+    finished, why = w.run_finished(spec, st, None)
+    assert finished is False, "an operator resume must suspend the verdict"
+    assert "resume" in why
