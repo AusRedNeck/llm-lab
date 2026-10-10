@@ -434,17 +434,35 @@ validation gradients diverge while training gradients stay bounded.
 
 1. **Schedule-length hypothesis**: the 160M arms early-stop before the
    annealing phase where 70M improved. Does a longer schedule (or cosine
-   restart) let 160M reach that regime?
+   restart) let 160M reach that regime? **PARTIALLY ANSWERED 2026-10-10 —
+   and the answer is not simply "longer":** the parity run got a 24,694-step
+   schedule (12x the old arms) and *still* diverged before annealing, because
+   a long cosine holds LR high for thousands of steps. Val peaked 1.3797 @2300
+   then climbed for 10,000 steps while train fell; lr was still 2.73e-4 at the
+   moment val hit 1.5788. So the schedule length wasn't the only variable — the
+   LR *height* over that length is. A longer schedule at a lower peak LR is the
+   untested combination.
 2. **LR on the fixed stack**: all three 160M LR probes ran pre-fix. The
-   winning LR may differ on the fixed architecture. PARTIALLY ANSWERED
-   2026-10-07: on the fixed (parity) stack at Pile scale, 5e-4 beats 3e-4 by
-   0.159 bpb at matched 2000 steps — see `pile-160m-lr-probe`. The high side
-   (6e-4, Pythia's raw peak) is still untested.
+   winning LR may differ on the fixed architecture. **SUPERSEDED 2026-10-10 —
+   the earlier "PARTIALLY ANSWERED" was wrong in a instructive way.** The probe
+   said 5e-4 beats 3e-4 by 0.159 bpb at 2,000 steps, but it ran its *own*
+   2,000-step cosine to 10%, so by step 2,000 its LR was already 5e-5. It never
+   tested 5e-4 *sustained* at high LR, which is exactly where the full run
+   diverged. **5e-4 won a sprint and lost the marathon.** Open again: bracket
+   3e-4 / 2e-4 on a 6,000-step horizon — long enough to see divergence a
+   2,000-step probe structurally cannot. The high side (6e-4, Pythia's raw
+   peak) is still untested and now looks less attractive, not more.
 3. **Checkpoint retention**: DECIDED 2026-10-07 — keep best + last + every
    5000th + the pythia-matched anchor step (step 16,000 of a 131,072-tok/step
    run) + finals; `prune_checkpoints.py --apply` reclaimed 89.2 GB and keeps
    keepers manifest-protected. Earlier note: 87 files / 35 GB, policy was
    Shane's call; mechanics unchanged.
+4. **NEW — does the in-loop val metric match the reference harness?**
+   `scripts/score_ours_vs_reference.py` says outright it *cannot settle* this,
+   and the parity run's headline number depends entirely on the answer. Until
+   the kept checkpoint is scored through the harness, every in-loop bpb is a
+   second instrument, not a verdict. Cheap; recommended before another epoch.
+
 
 ---
 
