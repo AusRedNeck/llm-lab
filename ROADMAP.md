@@ -158,6 +158,25 @@ loader is uniform). Relaunch 6 of 10 is live from step 9000 with that flag on th
 line; `max_restarts` was raised 6 -> 10 in the spec so the exhaustion cliff could not
 decide this mid-epoch.
 
+**That margin did not survive the run either, so the tripwire is off (2026-10-09/10).
+Gaps at steps 9100-9700: -0.1230, -0.1330, -0.1527, -0.1640, -0.1717, then **-0.3757 and
+-0.3600** -- two consecutive breaches of 0.30, stop #4, 22 more hours idle. The shape is
+structural: `served` fell 1.14 -> 1.02 while `random_train` rose 1.31 -> 1.40, because the
+model keeps improving at the last ~6 steps of data it was just trained on. The gap grows
+WITH PROGRESS, so no fixed margin works: 0.15 died at 9400, 0.30 died at 9700, and the
+loader cannot recycle in the first place (`torch.randint` over 3.23B tokens). Shane's
+call: `--recycle-margin 0` for this arm, with degrade 0.30, the saturation guard and
+tval/val still armed. Relaunched 06:34 2026-10-10 from step 9500 (attempt 7 of 10).
+
+**The actual failure was silence, and that is fixed too.** The watchdog is correct to
+latch a rule-stopped run as "final, latched - nothing to do" -- but that meant a dead run
+was indistinguishable from a healthy one unless someone looked, which is how 8.5h and
+then 22h disappeared. `scripts/check_run_health.py` prints only when something is wrong
+(COMPLETE / STOPPED / STALLED / WATCHDOG STALE) and is quiet when the run is healthy; it
+runs every 2 hours as Hermes cron `99c39776749f` (script-only, empty stdout = no message),
+wrapped by a one-file shim in `AppData/Local/hermes/scripts/` because the scheduler only
+loads scripts from that directory. Retire the job when the arm prints COMPLETE.
+
 **Found while verifying it — a resume restarts the RNG.** `torch.manual_seed(0)` runs at
 process start (`train/train.py:589`) and the seed is not checkpointed, but the model and
 optimizer are. So the resumed run continues the *weights* from step 7000 while replaying

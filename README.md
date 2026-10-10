@@ -107,7 +107,7 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-09 07:46 from `runs/*/loss.jsonl` + `experiments.json`, git `6ef4acd`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-10 06:38 from `runs/*/loss.jsonl` + `experiments.json`, git `eb87ac0`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
@@ -147,7 +147,7 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 | Run | last step | best bpb | tokens |
 |-----|-----------|----------|--------|
-| `20261007_2312_pythia160_tokenizer_pile_train_full` | 9039 | 1.3080 | 1.19B |
+| `20261007_2312_pythia160_tokenizer_pile_train_full` | 9568 | 1.3080 | 1.19B |
 
 ### Registry — 30 arms
 
