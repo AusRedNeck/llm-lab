@@ -48,6 +48,29 @@ LIVE_WINDOW_S = 3600
 MIN_STEP = 1000
 
 
+def replay_inflated(run) -> "tuple[bool, int]":
+    """Whether this run's best bpb came from a step that was trained twice.
+
+    A resume restarts the RNG (`torch.manual_seed(0)` at process start, seed not
+    checkpointed), so the re-walked steps re-evaluate on different windows than a
+    fresh run would -- post-resume evals land 0.15-0.20 bpb optimistic (measured on
+    p160-pile-parity-full, where step 9100 read 1.41535 in the segment resumed from
+    8500 and 1.30800 in the one resumed from 9000). Such a number is not comparable
+    to a fresh run and must not top a ranking.
+
+    The proof is in the rows: a resume appends the re-walked steps a second time, so
+    a duplicated best_step is the fingerprint. Returns (inflated, times_step_seen).
+    """
+    best_step = run.get("best_step")
+    if not best_step:
+        return False, 1
+    seen = sum(1 for row in run.get("rows") or []
+               if row.get("val_bpb") is not None and row.get("step") == best_step)
+    return seen > 1, max(seen, 1)
+
+
+
+
 def short_corpus(path):
     """Turn a corpus path into a human label that still says WHICH slice."""
     if not path:
@@ -125,8 +148,16 @@ def build_state():
     for slice_name, group in sorted(by_slice.items(),
                                    key=lambda kv: min(r["best_bpb"]
                                                       for r in kv[1])):
-        best = min(group, key=lambda r: r["best_bpb"])
-        rank_rows = sorted(group, key=lambda r: r["best_bpb"])[:6]
+        # Replay-inflated bests sort LAST, not first: a number produced by a
+        # re-walked step is not comparable to a fresh run's, so it must not win
+        # the table or carry the star. They still appear -- the run is real and
+        # the number is what the log says -- but demoted and marked.
+        def rank_key(r):
+            inflated, _ = replay_inflated(r)
+            return (inflated, r["best_bpb"])
+
+        best = min(group, key=rank_key)
+        rank_rows = sorted(group, key=rank_key)[:6]
         lines.append(f"### Best on {slice_name}")
         lines.append("")
         lines.append("| Rank | Run | bpb | @ step | Tokens seen | Params |")
@@ -135,10 +166,25 @@ def build_state():
             name = r["name"]
             tok = (r.get("best_step") or 0) * (r.get("eff") or 0) * (r.get("ctx") or 0)
             star = " ⭐" if i == 1 else ""
+            inflated, times = replay_inflated(r)
+            mark = f" ᴬ{times}" if inflated else ""
             lines.append(
-                f"| {i} | `{name}`{star} | **{r['best_bpb']:.4f}** | "
+                f"| {i} | `{name}`{star}{mark} | **{r['best_bpb']:.4f}** | "
                 f"{r['best_step']} | {fmt_tokens(tok)} | {r['params_m']:.1f}M |")
         lines.append("")
+        if any(replay_inflated(r)[0] for r in group):
+            demoted = [r for r in group if replay_inflated(r)[0]
+                       and r not in rank_rows]
+            lines.append("_ᴬ replay-inflated: the best came from a step trained twice "
+                         "(a resume restarts the RNG, so re-walked evals land 0.15-0.20 "
+                         "bpb optimistic). Sorted below fresh runs and not eligible for "
+                         "the star — see ROADMAP 'Verdict'. Do not quote as a result._")
+            for r in demoted:
+                inflated, times = replay_inflated(r)
+                lines.append(f"- ᴬ{times} `{r['name']}` **{r['best_bpb']:.4f}** @ "
+                             f"{r['best_step']} — demoted out of the table, not deleted; "
+                             f"the log says this, a fresh run would not.")
+            lines.append("")
         lines.append(f"_Slices are separate. `{best['name']}` scored against "
                      f"`{best.get('corpus') or 'unknown'}` — do not rank it "
                      f"against a run from another slice._")

@@ -1,6 +1,31 @@
 # llm-lab Roadmap
 
-## Status update (2026-09-23) — read first; supersedes stale bits below
+## Status update (2026-10-10) — read first; supersedes stale bits below
+
+### The 160M Pile parity run is OVER and did NOT establish parity (2026-10-10)
+
+Arm `p160-pile-parity-full` stopped at **step 12,500 / 24,694 (50.6%)**, never reaching
+the step-16,000 anchor where the comparison was designed. `best_bpb 1.3080` looks like a
+win against the 1.4614 bar and **is not** — it is a post-resume number (seed-0 replay makes
+those 0.15–0.20 optimistic; step 9100 measured 1.41535 in one segment and 1.30800 in
+another), it came from a *different instrument* than the bar, and it is only 78% of matched
+tokens. Full reasoning in the **Verdict** section below. **Do not quote 1.3080 as a parity
+result.**
+
+**The finding that survives:** the LR probe selected `5e-4` on a 2,000-step horizon whose
+own cosine had already decayed to 5e-5 — it never tested 5e-4 sustained at high LR, which
+is exactly where this run diverged (val 1.5788 while lr was still 2.73e-4). **5e-4 won a
+sprint and lost the marathon; do not relaunch at 5e-4.**
+
+**Kept:** `checkpoints/exp002_pythia160_tokenizer_202610072312_best.pt`. **Open decision:**
+score it through `scripts/score_ours_vs_reference.py` (recommended, cheap, settles the
+number) vs re-bracket LR at 3e-4/2e-4 on a 6,000-step horizon.
+
+**GPU idle, no training in flight, watchdog at rest.** Roughly half of this arm's
+wall-clock (~30h) was a stopped run nobody reported — four false-positive guard stops plus
+a broken cron delivery pipe; both fixed 2026-10-10.
+
+### Older status (2026-09-23)
 
 ### exp014 done + FROZEN LADDER verdict (`scripts/eval_frozen_ladder.py`)
 - exp014 (m50m @ bpe_owt50k_v2, full OWT): self-aborted step 5900 by the degrade guard; live best 1.7256 @ 2700; job completed.
@@ -64,7 +89,11 @@ suite **178 passed, 2 skipped**.
 
 Remaining plan: the next experiment is the **160M Pythia-parity run on the Pile**, not the older 66M-vs-Pythia plan. The 70M full-Pile run established the baseline. **Launched 2026-10-07 23:00** as arm `p160-pile-parity-full`; what the launch actually did is in the *Launched* subsection below.
 
-### Launch status (armed 2026-10-06, running 2026-10-07)
+### Launch status (armed 2026-10-06, ran 2026-10-07 → **stopped 2026-10-10 at 50.6%**)
+
+**The run is over.** It stopped at step 12,500/24,694 on a *correct* saturation-guard
+firing, and it did **not** establish parity — see **"Verdict"** below before quoting any
+number from this arm. Seven relaunches, four of them recovering false-positive stops.
 
 Done and verified: the full 13.1GB Pile text is tokenized on the **real HF
 Pythia encoder** (`data/pile_train_full_bpe_pythia_hf.bin`, 3,236,695,626
@@ -176,6 +205,69 @@ then 22h disappeared. `scripts/check_run_health.py` prints only when something i
 runs every 2 hours as Hermes cron `99c39776749f` (script-only, empty stdout = no message),
 wrapped by a one-file shim in `AppData/Local/hermes/scripts/` because the scheduler only
 loads scripts from that directory. Retire the job when the arm prints COMPLETE.
+
+### Verdict: the arm stopped at 50.6% and did NOT establish parity (2026-10-10)
+
+Final stop at **step 12,500 / 24,694 (50.6%)** — the saturation guard again, but **this
+time correctly**. Peaks *and* troughs climbed for 3,400 steps with no new best after
+1.3080@9100 (troughs 1.4242 → 1.4571 → 1.4857; peaks 1.5128 → 1.5494 → 1.5788; the last
+two evals 1.5767/1.5788 agreed, which is exactly what the `030b762` persistence fix
+demands). LR was still **2.73e-4 — over half peak — at the moment val hit 1.5788**, so
+this is the documented divergence pattern, not a spike. First guard firing all run that
+deserves to stand.
+
+**`best_bpb 1.3080` is NOT a claimable win against the 1.4614 bar.** Three reasons, each
+verified rather than assumed:
+
+1. **Seed-0 replay inflates it.** Step 9100 measured **1.41535** in the segment resumed
+   from 8500 and **1.30800** in the segment resumed from 9000 — same step, 0.107 apart.
+   A resume resets `torch.manual_seed(0)`, so eval N draws the windows a fresh run had at
+   step N-minus-resume-point; post-resume evals land 0.15–0.20 optimistic (measured
+   2026-10-08). The best checkpoint *is* a post-resume number.
+2. **Two instruments.** 1.4614 came from the HF reference harness
+   (`reports/pythia160m_step1000_reference.json`: seed 1234, 60 batches, 245,760
+   non-overlapping tokens); 1.3080 came from the trainer's in-loop `eval_three_way` (20
+   random batches off the global RNG). `scripts/score_ours_vs_reference.py` says it
+   outright: *"CANNOT SETTLE whether our trainer's in-loop val_bpb matches this harness —
+   quote them as two instruments, not one."*
+3. **Token mismatch.** 12,500 steps = 1.638B tokens vs pythia@step1000's 2.097B = **78%**,
+   and the anchor (16,000) was never reached, so no at-anchor measurement exists. The 70M
+   earned its "6.0% ahead" only after both sides went through the *same* harness at
+   matched tokens.
+
+Even the pessimistic reading (~1.42) sits in the bar's neighbourhood. Neighbourhood is not
+parity — and the run was diverging, so more steps at 5e-4 could not have closed it.
+
+### The real finding: the LR probe selected on too short a horizon
+
+`5e-4` won the probe by 0.159 bpb at 2,000 steps — but the probe ran its **own**
+2,000-step cosine to 10%, so by step 2,000 its LR was already 5e-5. The full run's cosine
+spans 24,694 steps, so at step 2,300 (where val peaked at 1.3797) the LR was still
+~4.9e-4. The probe never tested 5e-4 *sustained at high LR for thousands of steps*, which
+is precisely where it diverged. "Compare final 4-eval block means" cannot detect divergence
+appearing at 5,000+. **5e-4 won a sprint and lost the marathon** — three separate segments
+say it diverges by ~9,000. Do not relaunch at 5e-4.
+
+### The human cost, on the record
+
+Between the four false stops and the run's end, the GPU sat dead **~8.5h then ~22h ≈ 30h
+idle** on a job whose entire plan was ~30h. Roughly half the wall-clock was a stopped run
+nobody reported: guards killed it four times wrongly, *and* the COS cron delivery was
+broken (403 Missing Access, then `standalone_sender_fn` unregistered), so every death went
+unreported. Both halves fixed 2026-10-10 — delivery now goes write-file + relay with real
+message ids, and `cron_health_guard.py` gained a check for enabled jobs whose
+`last_status` is `delivery_failed`, because delivery failures leave `failure_streak` at 0
+and never reach `cron_incidents` (see `operations/cron-troubleshooting` Pitfall AB/AB.2).
+
+**Kept:** `checkpoints/exp002_pythia160_tokenizer_202610072312_best.pt` (1.95 GB, the
+1.3080 model, keeper-protected).
+
+**Next decision (Shane's):** (1) score that checkpoint through
+`scripts/score_ours_vs_reference.py` — one harness, both sides, settled number, cheap,
+caveated as 78% tokens; or (2) re-bracket LR at 3e-4/2e-4 on a **6,000-step** horizon, long
+enough to see the divergence the 2,000-step probe structurally cannot. *Recommendation: (1)
+first* — it converts "neighbourhood" into a real figure before spending another epoch.
+
 
 **Found while verifying it — a resume restarts the RNG.** `torch.manual_seed(0)` runs at
 process start (`train/train.py:589`) and the seed is not checkpointed, but the model and

@@ -107,20 +107,23 @@ python scripts/readme_state.py --check  # exit 1 if stale (CI / cron)
 ```
 
 <!-- AUTO:STATE:BEGIN -->
-*Generated 2026-10-10 06:38 from `runs/*/loss.jsonl` + `experiments.json`, git `eb87ac0`. Do not hand-edit — run `python scripts/readme_state.py`.*
+*Generated 2026-10-10 13:18 from `runs/*/loss.jsonl` + `experiments.json`, git `6ec5adb`. Do not hand-edit — run `python scripts/readme_state.py`.*
 
 ### Best on Pile
 
 | Rank | Run | bpb | @ step | Tokens seen | Params |
 |------|-----|-----|--------|-------------|--------|
-| 1 | `20261007_2312_pythia160_tokenizer_pile_train_full` ⭐ | **1.3080** | 9100 | 1.19B | 162.7M |
-| 2 | `20260930_2055_pythia_tokenizer_pile_train_full` | **1.4033** | 13400 | 1.76B | 70.7M |
-| 3 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
-| 4 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
-| 5 | `20261006_2350_pythia160_tokenizer_pile_train_full` | **1.5876** | 1800 | 236M | 162.7M |
-| 6 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
+| 1 | `20260930_2055_pythia_tokenizer_pile_train_full` ⭐ | **1.4033** | 13400 | 1.76B | 70.7M |
+| 2 | `20261006_2126_pythia160_tokenizer_pile_train_full` | **1.4279** | 1800 | 236M | 162.7M |
+| 3 | `20260930_0907_pythia_tokenizer_pile_train_full` | **1.5226** | 4900 | 642M | 70.7M |
+| 4 | `20261006_2350_pythia160_tokenizer_pile_train_full` | **1.5876** | 1800 | 236M | 162.7M |
+| 5 | `20260929_2133_pythia_tokenizer_pile_train_full` | **1.9683** | 3000 | 49M | 70.7M |
+| 6 | `20260929_2159_pythia_tokenizer_pile_train_full` | **2.0132** | 4000 | 66M | 70.7M |
 
-_Slices are separate. `20261007_2312_pythia160_tokenizer_pile_train_full` scored against `data/pile_train_full.txt` — do not rank it against a run from another slice._
+_ᴬ replay-inflated: the best came from a step trained twice (a resume restarts the RNG, so re-walked evals land 0.15-0.20 bpb optimistic). Sorted below fresh runs and not eligible for the star — see ROADMAP 'Verdict'. Do not quote as a result._
+- ᴬ3 `20261007_2312_pythia160_tokenizer_pile_train_full` **1.3080** @ 9100 — demoted out of the table, not deleted; the log says this, a fresh run would not.
+
+_Slices are separate. `20260930_2055_pythia_tokenizer_pile_train_full` scored against `data/pile_train_full.txt` — do not rank it against a run from another slice._
 
 ### Best on OpenWebText
 
@@ -145,13 +148,11 @@ _Slices are separate. `20260926_1326_m66m_rope_bpe_owt4k_owt_4p5gb_combined` sco
 
 ### In flight
 
-| Run | last step | best bpb | tokens |
-|-----|-----------|----------|--------|
-| `20261007_2312_pythia160_tokenizer_pile_train_full` | 9568 | 1.3080 | 1.19B |
+None. No curve has moved in the last 60 minutes. GPU is idle.
 
 ### Registry — 30 arms
 
-closed 11 · pass 9 · fail 8 · inconclusive 1 · running 1
+closed 11 · pass 9 · fail 8 · inconclusive 1 · stopped at 50.6% (step 12500/24694); saturation guard TRUE positive; parity NOT established - best_bpb 1.3080 not comparable to the 1.4614 bar (replay inflation + two instruments + 78% tokens). LR probe selected on too short a horizon. 1
 
 Open arms (not `closed`):
 
@@ -167,7 +168,7 @@ Open arms (not `closed`):
 | `p160-lr-1e-3` | pythia160-lr-probe | **fail** | 160M LR probe rung. |
 | `p160-lr-5e-4` | pythia160-lr-probe | **pass** | 160M LR probe (1000 steps, eff64). |
 | `p160-pile-lr5e-4` | pile-160m-lr-probe | **pass** | LR bracket for the 160M Pile parity run (plan 2026-10-01: 'a 1-2k probe at 5e-4 vs 3e-4 should bracket it -... |
-| `p160-pile-parity-full` | pile-160m-parity | **running** | FULL 160M Pythia-parity run on the Pile: one epoch = 24,694 steps at eff 131,072 tok/step (micro 8 x accum ... |
+| `p160-pile-parity-full` | pile-160m-parity | **stopped at 50.6% (step 12500/24694); saturation guard TRUE positive; parity NOT established - best_bpb 1.3080 not comparable to the 1.4614 bar (replay inflation + two instruments + 78% tokens). LR probe selected on too short a horizon.** | FULL 160M Pythia-parity run on the Pile: one epoch = 24,694 steps at eff 131,072 tok/step (micro 8 x accum ... |
 | `p50k-lr-15e-4` | pythia50k-70m-lr-probe | **pass** | 50k 70M LR probe; winner of the ladder. |
 | `p50k-lr-3e-3` | pythia50k-70m-lr-probe | **fail** | 50k 70M LR probe rung (bracket test). |
 | `pile-eff128k-5k` | pile-batch-knee | **pass** | Knee probe at eff batch 131,072 (micro 16 x accum 16), LR held at 5e-4. Single-lever vs pile-full-diet-70m:... |
