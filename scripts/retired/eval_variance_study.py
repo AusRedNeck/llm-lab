@@ -27,7 +27,7 @@ If large-sample converges to ~1.40, the trainer is right and small samples are j
 If it converges to ~1.46, the trainer is under-reporting and every bpb we have quoted
 needs a confidence interval.
 
-Run: .venv/Scripts/python.exe scripts/eval_variance_study.py
+Run: .venv/Scripts/python.exe scripts/retired/eval_variance_study.py
 """
 import json
 import math
@@ -37,7 +37,7 @@ import statistics
 import numpy as np
 import torch
 
-LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LAB = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_BIN = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin")
 CACHE_META = os.path.join(LAB, "data", "pile_train_full_bpe_pythia70m.bin.meta.json")
 CKPT = os.path.join(LAB, "checkpoints",

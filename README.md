@@ -198,33 +198,35 @@ llm-lab/
 │   ├── arm.py              # arm a new experiment (writes spec + registry row)
 │   ├── probe.py            # offline checkpoint X-ray (layer norms, attn entropy)
 │   └── hooks.py            # forward-capture connector (used by probe.py)
-├── scripts/readme_state.py # generates the State block above
+├── scripts/                # operator tools, data pipelines, scoring, launchers
+│   ├── train_watchdog.py   # supervisor (cron every 10 min)
+│   ├── train_launch.py     # detached launcher (called by watchdog)
+│   ├── prune_checkpoints.py # keeper-aware checkpoint retention
+│   ├── audit_run_data.py   # data integrity checker
+│   └── readme_state.py     # generates the State block above
 ├── experiments.json        # experiment registry — one row per ARM
-├── train_job.json          # active job spec (arm.py writes this)
-├── train_watchdog.py       # cron supervisor
-├── train_launch.py         # detached launcher (called by watchdog)
-├── prune_checkpoints.py    # keeper-aware checkpoint retention
-├── audit_run_data.py       # data integrity checker
 ├── reports/                # score reports (matched tokens, audits)
-└── data/                   # corpora + tokenized binaries
+└── data/                   # corpora + tokenized binaries (local, not in git)
 ```
 
 ## Running things
 
 ```bash
 python viz/arm.py --id <name> -- <train args>   # arm an experiment
-python train_watchdog.py                        # supervisor, cron every 10 min
-python viz/dashboard.py [--watch 30]            # rebuild the board
-python viz/probe.py checkpoints/<ckpt>.pt       # offline checkpoint X-ray
-python viz/registry.py --check                  # registry vs disk integrity
-python prune_checkpoints.py                     # keeper-aware retention
-python audit_run_data.py                        # data integrity audit
+python scripts/train_watchdog.py                  # supervisor, cron every 10 min
+python viz/dashboard.py [--watch 30]               # rebuild the board
+python viz/probe.py checkpoints/<ckpt>.pt          # offline checkpoint X-ray
+python viz/registry.py --check                     # registry vs disk integrity
+python scripts/prune_checkpoints.py                # keeper-aware retention
+python scripts/audit_run_data.py                   # data integrity audit
 ```
 
 **Supervision chain:** watchdog → schtasks `Hermes_TrainRun` → hidden vbs →
-`run_train.bat` → `train_launch.py` → trainer. Task Scheduler is the parent, so
+`run_train.bat` → `scripts/train_launch.py` → trainer. Task Scheduler is the parent, so
 app restarts can't kill a run. Resume always takes the newest **step**
-checkpoint, never `_best.pt`.
+checkpoint, never `_best.pt`. Active job specs and runtime state stay at the repo
+root because the supervisor expects them there; they are machine/run state, not
+project source.
 
 ## Machines
 

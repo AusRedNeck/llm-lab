@@ -22,7 +22,7 @@ Three candidate causes, tested independently rather than argued about:
      RANDOM crops, re-drawn every eval. The reference uses 60 x 8 x 512 = 245,760 tokens on
      a fixed seed. Random crops of a 20M-token val set have real variance.
 
-Run: .venv/Scripts/python.exe scripts/diagnose_eval_gap.py
+Run: .venv/Scripts/python.exe scripts/retired/diagnose_eval_gap.py
 """
 import json
 import math
@@ -31,7 +31,7 @@ import os
 import numpy as np
 import torch
 
-LAB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LAB = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
 CKPT = os.path.join(LAB, "checkpoints",
                     "exp002_pythia_tokenizer_202609302055_step13500.pt")

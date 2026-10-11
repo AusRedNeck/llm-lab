@@ -361,7 +361,7 @@ python viz/arm.py --id p160-lr2e-4-fix --family capacity-50k \
     --goal "cooler LR on the fixed 160M stack" --control p160-fix-long \
     --lever lr=5e-4->2e-4 \
     -- --steps 20000 --batch 8 --accum 8 --lr 2e-4 --preset pythia160 ...
-python train_watchdog.py    # detached launch + supervision
+python scripts/train_watchdog.py    # detached launch + supervision
 ```
 
 Check registry health:
@@ -454,7 +454,7 @@ validation gradients diverge while training gradients stay bounded.
    peak) is still untested and now looks less attractive, not more.
 3. **Checkpoint retention**: DECIDED 2026-10-07 — keep best + last + every
    5000th + the pythia-matched anchor step (step 16,000 of a 131,072-tok/step
-   run) + finals; `prune_checkpoints.py --apply` reclaimed 89.2 GB and keeps
+   run) + finals; `scripts/prune_checkpoints.py --apply` reclaimed 89.2 GB and keeps
    keepers manifest-protected. Earlier note: 87 files / 35 GB, policy was
    Shane's call; mechanics unchanged.
 4. **NEW — does the in-loop val metric match the reference harness?**

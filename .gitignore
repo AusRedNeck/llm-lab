@@ -26,3 +26,13 @@ watcher_announced.json
 
 # watcher self-test scratch (synthetic jobNEW fixtures, not run history)
 archive/ops/**/_wtest/
+
+# Python build and tool caches (generated locally)
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
