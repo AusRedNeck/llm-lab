@@ -36,3 +36,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# operator backups of the job spec/state (arm arming safety copies, disk-only)
+train_job*.bak*

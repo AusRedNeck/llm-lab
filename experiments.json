@@ -465,7 +465,9 @@
     {
       "id": "p160-pile-2k-1k-lr3e-4",
       "family": "pythia160-2k-pile",
-      "run_dirs": ["20261011_1123_pythia160_2k_tokenizer_pile_train_full"],
+      "run_dirs": [
+        "20261011_1123_pythia160_2k_tokenizer_pile_train_full"
+      ],
       "control_id": null,
       "lever": {
         "code": "pythia160_2k 2048 ctx RoPE-only bias-free head",
@@ -474,6 +476,49 @@
       "goal": "1k-step real-Pile run at pure Pythia-160M 2K context; validate stability, memory and early learning, not token-matched parity yet",
       "verdict": "pass",
       "note": "COMPLETED 2026-10-11 at step 1000/1000. Final avg50 loss=5.0655; best raw in-loop val=1.7735 bpb @1000. Batch1 x accum64 = 131,072 tokens/update; measured early pace ~14.2k tok/s (~9.2s/update), roughly 2.55h total. PASS is for pipeline/stability/early-learning only: this was a 1k-step cosine (131.1M tokens), not the 16k Pythia token anchor; no parity claim and do not resume it into the long schedule. Final step checkpoint saved at checkpoints/exp002_pythia160_2k_tokenizer_202610111123_step1000.pt."
+    },
+    {
+      "id": "p160-pile-2k-chunked-16k-lr3e-4",
+      "family": "pythia160-2k-pile",
+      "run_dirs": [
+        "20261014_0906_pythia160_2k_tokenizer_pile_train_full"
+      ],
+      "control_id": null,
+      "lever": {
+        "lr": "3e-4 (conservative continuation of the completed 2K-context pilot; long-horizon choice remains experimental)",
+        "code": "chunked global schedule + explicit pause/resume"
+      },
+      "goal": "Fresh 16k-step Pythia-160M 2K Pile run; chunk 1 ends at global step 4000; pause for explicit approval; validate sustained long-schedule stability and reach the 160M step-1000 token anchor at 16k",
+      "verdict": "aborted",
+      "note": "ABORTED before first eval at step 19; no quality conclusion. Replaced by schedule-matched LR calibration (production horizon 16000, probe endpoint 6000)."
+    },
+    {
+      "id": "p160-2k-lr-cal-3e-4",
+      "family": "pythia160-2k-lr-calibration",
+      "run_dirs": [
+        "20261014_0911_pythia160_2k_tokenizer_pile_train_full"
+      ],
+      "control_id": null,
+      "lever": {
+        "lr": "3e-4"
+      },
+      "goal": "LR calibration A: compare LR=3e-4 against 2e-4 under the same 16000-step global cosine, ending at global step 6000; same Pythia160_2k, Pile cache, effective batch, warmup, eval cadence and seed; choose via final full-period envelope and retain uncertainty",
+      "verdict": "running",
+      "note": ""
+    },
+    {
+      "id": "p160-2k-lr-cal-2e-4",
+      "family": "pythia160-2k-lr-calibration",
+      "run_dirs": [
+        "20261016_0941_pythia160_2k_tokenizer_pile_train_full"
+      ],
+      "control_id": "p160-2k-lr-cal-3e-4",
+      "lever": {
+        "lr": "3e-4->2e-4"
+      },
+      "goal": "LR calibration B: compare LR=2e-4 against 3e-4 under the same 16000-step global cosine, ending at global step 6000; identical Pythia160_2k, Pile cache, effective batch, warmup, eval cadence and seed as p160-2k-lr-cal-3e-4 (single lever: lr); choose via final full-period envelope and retain uncertainty",
+      "verdict": "running",
+      "note": ""
     }
   ],
   "legacy_cutoff": "20260921",

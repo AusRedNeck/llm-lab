@@ -1,0 +1,20 @@
+{
+  "checkpoint": "exp002_pythia160_tokenizer_202610072312_best.pt",
+  "checkpoint_step": 9100,
+  "saved_cfg_use_rope": false,
+  "scored_with_use_rope": true,
+  "seed": 1234,
+  "batches": 60,
+  "batch": 8,
+  "ctx": 512,
+  "bytes_per_token": 3.87428,
+  "device": "cuda",
+  "ours_tokens": 1192755200,
+  "val_bpb_from_train_log": 1.307998312798861,
+  "note": "same harness as score_ours_vs_reference.py, only cfg.use_rope corrected False->True",
+  "ours": {
+    "nll_per_token_nats": 3.554717,
+    "bpb": 1.323697,
+    "tokens_scored": 245760
+  }
+}

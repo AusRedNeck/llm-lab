@@ -1,0 +1,20 @@
+{
+  "checkpoint": "exp002_pythia160_tokenizer_202610072312_step5000.pt",
+  "checkpoint_step": 5000,
+  "cache": "D:\\Projects\\llm-lab\\data\\pile_train_full_bpe_pythia_hf.bin",
+  "cache_desc": "pile_train_full_bpe_pythia_hf.bin: total 3,236,695,626  train [:, 3,204,328,669]  val [3,204,328,669:,] = 32,366,957 ids",
+  "seed": 1234,
+  "batches": 60,
+  "batch": 8,
+  "ctx": 512,
+  "bytes_per_token": 3.87428,
+  "device": "cuda",
+  "ours_tokens": 655360000,
+  "token_budget_source": "D:\\Projects\\llm-lab\\runs\\20261007_2312_pythia160_tokenizer_pile_train_full\\loss.jsonl",
+  "val_bpb_from_train_log": null,
+  "ours": {
+    "nll_per_token_nats": 3.941623,
+    "bpb": 1.467772,
+    "tokens_scored": 245760
+  }
+}
