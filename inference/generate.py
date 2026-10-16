@@ -24,19 +24,7 @@ from model.transformer import Transformer
 def load_model(ckpt_path: str, device: torch.device):
     ckpt = torch.load(ckpt_path, map_location=device)
     c = ckpt["cfg"]
-    model = Transformer(
-        vocab_size=c["vocab_size"],
-        context_length=c["context_length"],
-        embedding_dim=c["embedding_dim"],
-        num_heads=c["num_heads"],
-        num_layers=c["num_layers"],
-        use_rope=c.get("use_rope", False),
-        # Parity knobs ride along in ckpt["cfg"] (added to ModelConfig).
-        # Old checkpoints lack them -> 1.0 / True = what they were trained with.
-        rotary_pct=c.get("rotary_pct", 1.0),
-        dropout=c.get("dropout", 0.0),
-        parallel_residual=c.get("parallel_residual", True),
-    ).to(device)
+    model = Transformer.from_config(c).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, c

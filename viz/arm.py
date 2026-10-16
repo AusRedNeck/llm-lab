@@ -104,14 +104,27 @@ def main():
                      "Let it finish or mark it done before arming a new one.")
 
     steps = int(arg_val(args, "--steps"))
-    log = ns.log or f"logs/{ns.id}.log"
+    stop_at = arg_val(args, "--stop-at-step")
+    try:
+        target_steps = steps if stop_at is None else int(stop_at)
+    except ValueError:
+        sys.exit("arm.py: --stop-at-step must be an integer")
+    if target_steps <= 0 or target_steps > steps:
+        sys.exit("arm.py: --stop-at-step must be > 0 and <= --steps")
+    if stop_at is not None and ns.next_job:
+        sys.exit("arm.py: chunked runs pause for explicit go; --next-job would auto-chain")
+    log = ns.log or (f"logs/{ns.id}_chunk01.log" if stop_at is not None
+                     else f"logs/{ns.id}.log")
     spec = {
         "name": ns.id,
         "desc": ns.goal,
         "ckpt_dir": "checkpoints",
         "stamp": "",
         "run_name": "",
-        "target_steps": steps,
+        "target_steps": target_steps,
+        "schedule_steps": steps,
+        "chunk_steps": target_steps if stop_at is not None else None,
+        "chunk_index": 1,
         "python": ns.python or _default_python(),
         "train_args": args,
         "match": match_from(args),

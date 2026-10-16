@@ -95,6 +95,9 @@ uv run python train/train.py --tok_cache data/<corpus>.bin --preset pythia ...
 
 > **Never launch training as a child of a running app.** An update will kill it.
 > Use the detached path — `viz/arm.py` then the watchdog — or Task Scheduler.
+>
+> For the Pythia-160M 2K chunked comparison design and explicit pause/resume workflow, see
+> [`references/pythia-160m/README.md`](references/pythia-160m/README.md#chunked-2k-comparison-plan).
 
 ## State
 

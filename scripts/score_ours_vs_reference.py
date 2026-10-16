@@ -1,37 +1,10 @@
 #!/usr/bin/env python3
-"""Score OUR checkpoint on the SAME slice the pythia-70m reference was scored on.
+"""Compare a lab checkpoint with any local Pythia checkpoint on one shared harness.
 
-WHY THIS EXISTS
-    reports/pythia70m_reference.json says EleutherAI/pythia-70m scores bpb 1.2727 on
-    data/incoming/pile_val_slice.txt. Our full-epoch run reports val bpb 1.40325 on the
-    trainer's own held-out tail. Those two numbers were produced by DIFFERENT code paths
-    (HF `model(batch, labels=batch)` vs the trainer's in-loop eval), so quoting the
-    1.4033-vs-1.2727 gap as "we are 9.3% behind" is an apples-to-oranges claim until
-    both are scored the same way.
-
-    This closes the comparison properly: it loads OUR checkpoint into the SAME harness
-    that produced the reference, on the SAME slice, with the SAME bpb formula. It also
-    re-scores the reference weights in the same process, so any residual difference is
-    attributable to the model rather than to the harness.
-
-    VALIDITY RULES (borrowed from score_pythia70m_reference.py, deliberately identical)
-    - Same IDS: the val tail of the ACTIVE run's token cache, read from the memmap by
-      scripts/val_fixture.py. Never decoded to text. (The 2026-10-01 version of this
-      script hardcoded the 70M cache; since the 160M run trains on the full-corpus
-      cache, that tail would have been inside its training set.)
-    - Same bpb convention: bpb = mean NLL * log2(e) / bytes-per-token, with
-      bytes-per-token MEASURED on the scored ids (trainer's recipe), not a constant
-      carried over from a previous tail.
-    - Fixed seed, non-overlapping windows, HF shifts labels internally (do NOT slice).
-    - Same ctx (512) and same number of scored tokens as the stored reference.
-
-    CANNOT SETTLE: whether our trainer's in-loop val_bpb matches this harness. The
-    trainer scores its own tail with its own eval path; this is a separate
-    measurement of the same ids, so quote the harness number and the logged number
-    as two instruments, not one.
-
-Usage:
-    .venv/Scripts/python.exe scripts/score_ours_vs_reference.py --ckpt <path> [--batches 60]
+The checkpoint's exact training-token budget is derived from its run log (or supplied
+with --ours-tokens). The reference token budget comes from the Pythia step in the
+snapshot directory name, preventing the old 70M-only denominator from leaking into a
+160M comparison.
 """
 import argparse
 import json
@@ -48,10 +21,8 @@ if os.path.join(LAB, "scripts") not in sys.path:
     sys.path.insert(0, os.path.join(LAB, "scripts"))
 import val_fixture  # noqa: E402
 
-SLICE = os.path.join(LAB, "data", "incoming", "pile_val_slice.txt")
 REF_REPORT = os.path.join(LAB, "reports", "pythia70m_reference.json")
-LEGACY_BPT = 3.9104      # the OLD tail's bytes/token; --source slice only
-OURS_TOKENS = 2_003_992_003
+LEGACY_BPT = 3.9104      # fallback only; main always measures bpt on the selected ids
 PYTHIA_TOK_STEP = 2048 * 1024
 
 
@@ -74,6 +45,12 @@ def reference_tokens(ref_dir: str) -> tuple[int, str]:
         step = int(m.group(1))
         return step * PYTHIA_TOK_STEP, f"step{step}"
     return 143000 * PYTHIA_TOK_STEP, "final (step143000, unversioned snapshot)"
+
+
+def tokens_seen(step: int, train_args: dict, cfg: dict) -> int:
+    """Exact optimizer-token budget: completed steps × micro-batch × accum × ctx."""
+    return (int(step) * int(train_args["batch"])
+            * int(train_args.get("accum", 1)) * int(cfg["context_length"]))
 
 
 def _logits(model, bt, is_hf):
@@ -146,7 +123,10 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--batches", type=int, default=60)
     ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--ctx", type=int, default=512)
+    ap.add_argument("--ctx", type=int, default=None,
+                    help="scoring context; default: checkpoint training context")
+    ap.add_argument("--ours-tokens", type=int, default=None,
+                    help="override lab checkpoint's optimizer-token budget; default derives from its run log")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--skip-reference", action="store_true")
     ap.add_argument("--val-frac", type=float, default=0.01)
@@ -190,33 +170,37 @@ def main():
     from model.transformer import Transformer
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
     cfg_d = ck["cfg"]
-    print(f"\ncheckpoint: step {ck.get('step')} cfg={ {k: cfg_d.get(k) for k in ('embedding_dim','num_layers','num_heads','context_length','vocab_size')} }")
-    # Build exactly the way train/train.py builds it (Transformer + explicit kwargs, NOT a
-    # ModelConfig object) so the state_dict keys match one-for-one. Reconstructing a config
-    # and calling a different constructor is how you get a silent key mismatch.
-    ours = Transformer(
-        vocab_size=cfg_d["vocab_size"],
-        context_length=cfg_d["context_length"],
-        embedding_dim=cfg_d["embedding_dim"],
-        num_heads=cfg_d["num_heads"],
-        num_layers=cfg_d["num_layers"],
-        use_rope=True,
-        rotary_pct=cfg_d.get("rotary_pct", 0.25),
-        dropout=0.0,
-        parallel_residual=cfg_d.get("parallel_residual", True),
-    ).to(torch.float32)
+    if a.ours_tokens is not None:
+        ours_tokens = a.ours_tokens
+        token_budget_source = "--ours-tokens"
+    else:
+        run_name = ck.get("run_name")
+        log_path = os.path.join(LAB, "runs", run_name, "loss.jsonl") if run_name else None
+        if not log_path or not os.path.isfile(log_path):
+            raise SystemExit("cannot derive this checkpoint's token budget; pass --ours-tokens")
+        with open(log_path, encoding="utf-8") as f:
+            run_header = json.loads(next(f))
+        ours_tokens = tokens_seen(ck["step"], run_header["args"], cfg_d)
+        token_budget_source = log_path
+    ctx = a.ctx if a.ctx is not None else int(cfg_d["context_length"])
+    print(f"checkpoint token budget: {ours_tokens:,} (source: {token_budget_source})")
+    print(f"scoring context: {ctx}")
+    print(f"\ncheckpoint: step {ck.get('step')} cfg={ {k: cfg_d.get(k) for k in ('embedding_dim','num_layers','num_heads','context_length','vocab_size','use_learned_position_embeddings','lm_head_bias')} }")
+    # Rebuild from the checkpoint's actual config so architecture choices (including
+    # the optional learned position table) follow the saved weights exactly.
+    ours = Transformer.from_config(cfg_d).to(torch.float32)
     ours.load_state_dict(ck["model"])
     ours.to(dev).eval()
 
     res = {"checkpoint": os.path.basename(a.ckpt), "checkpoint_step": ck.get("step"),
            "cache": cache_bin, "cache_desc": val_fixture.describe(cache_bin, meta, a.val_frac),
            "seed": a.seed, "batches": a.batches, "batch": a.batch,
-           "ctx": a.ctx, "bytes_per_token": round(bpt, 6), "device": dev,
-           "ours_tokens": OURS_TOKENS,
+           "ctx": ctx, "bytes_per_token": round(bpt, 6), "device": dev,
+           "ours_tokens": ours_tokens, "token_budget_source": token_budget_source,
            "val_bpb_from_train_log": ck.get("val_bpb")}
 
     print("\n=== ours (this lab's checkpoint, same harness) ===")
-    res["ours"] = score_ids(ours, ids, a.batches, a.batch, a.ctx, a.seed, dev,
+    res["ours"] = score_ids(ours, ids, a.batches, a.batch, ctx, a.seed, dev,
                             "ours", is_hf=False, bpt=bpt)
 
     # ---- the reference, re-scored in the SAME process for a like-for-like delta
@@ -225,24 +209,23 @@ def main():
         ref = AutoModelForCausalLM.from_pretrained(
             a.reference, torch_dtype=torch.float32)
         ref.to(dev).eval()
-        res["reference_rerun"] = score_ids(ref, ids, a.batches, a.batch, a.ctx,
+        res["reference_rerun"] = score_ids(ref, ids, a.batches, a.batch, ctx,
                                            a.seed, dev, "reference", is_hf=True,
                                            bpt=bpt)
         ref_tokens, ref_label = reference_tokens(a.reference)
         res["reference_rerun"]["tokens_seen"] = ref_tokens
         res["reference_rerun"]["revision"] = ref_label
-        ratio = ref_tokens / OURS_TOKENS
+        ratio = ref_tokens / ours_tokens
         res["comparability"] = (
-            f"TOKEN-MATCHED ({ratio:.3f}x): ours {OURS_TOKENS:,} vs reference "
+            f"TOKEN-MATCHED ({ratio:.3f}x): ours {ours_tokens:,} vs reference "
             f"{ref_tokens:,} -- the gap is a like-for-like quality gap"
             if abs(ratio - 1.0) <= 0.10 else
-            f"NOT TOKEN-MATCHED ({ratio:.0f}x): ours {OURS_TOKENS:,} vs reference "
-            f"{ref_tokens:,} ({ref_label}). The gap measures distance to a FINISHED "
-            f"model, not quality at equal training -- never quote it as a verdict. "
-            f"Use scripts/score_matched_tokens.py for that.")
+            f"NOT TOKEN-MATCHED ({ratio:.3f}x): ours {ours_tokens:,} vs reference "
+            f"{ref_tokens:,} ({ref_label}); do not interpret the gap as an equal-budget comparison.")
 
     stored = None
-    if os.path.exists(REF_REPORT):
+    if (os.path.basename(os.path.normpath(a.reference)) == "pythia70m_weights"
+            and os.path.exists(REF_REPORT)):
         stored = json.load(open(REF_REPORT, encoding="utf-8")).get("bpb")
         res["reference_stored"] = stored
 
@@ -251,19 +234,17 @@ def main():
     if "reference_rerun" in res:
         r = res["reference_rerun"]["bpb"]
         print(f"  ours        {ours_bpb:.4f}")
-        print(f"  pythia-70m  {r:.4f}   (re-scored here)")
-        print(f"  gap         {ours_bpb - r:+.4f} bpb  = {100*(ours_bpb/r - 1):+.1f}% worse")
+        print(f"  reference   {r:.4f}   ({os.path.basename(os.path.normpath(a.reference))})")
+        print(f"  gap         {ours_bpb - r:+.4f} bpb  = {100*(ours_bpb/r - 1):+.1f}%")
+        print(f"  comparison  {res['comparability']}")
         print(f"  trainer's own val_bpb for this ckpt: {res['val_bpb_from_train_log']}")
-        print("  ^ NOT a verdict: the default reference is pythia-70m's FINAL")
-        print("    checkpoint (299.9B tokens, 150x our 2.004B). It answers")
-        print("    'how far is a finished model from ours', not 'are we ahead'.")
-        print("    For the matched-token verdict run score_matched_tokens.py.")
     if stored:
         print(f"  stored reference {stored:.4f} | ours {ours_bpb:.4f} -> {ours_bpb - stored:+.4f}")
-        print("  NOTE: if stored and re-scored differ, the stored number came from a")
-        print("        different harness/seed path and the gap is not model quality.")
+        print("  NOTE: the stored score is a different harness measurement; use the re-scored one.")
 
-    out = os.path.join(LAB, "reports", "ours_vs_pythia70m.json")
+    ref_tag = os.path.basename(os.path.normpath(a.reference)).replace(".", "_")
+    ckpt_tag = os.path.splitext(os.path.basename(a.ckpt))[0]
+    out = os.path.join(LAB, "reports", f"ours_vs_{ref_tag}_{ckpt_tag}.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     json.dump(res, open(out, "w", encoding="utf-8"), indent=2)
     print(f"\nwrote {out}")

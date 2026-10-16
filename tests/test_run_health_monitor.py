@@ -79,8 +79,32 @@ def test_reaching_target_reports_complete(lab, capsys):
 
 def test_complete_wins_over_terminal_status(lab, capsys):
     """A finished arm must not be reported as a stop."""
-    lab["curve"].write_text('{"step": 24694, "val_bpb": 1.40}\n', encoding="utf-8")
+    lab["curve"].write_text('{"step": 24694, "val_bpb": 1.40}' + chr(10), encoding="utf-8")
     set_state(lab["state"], status="stopped-by-rule")
     h.main()
     out = capsys.readouterr().out
     assert out.startswith("COMPLETE:")
+
+
+def test_paused_chunk_is_silent_and_not_final(lab, capsys):
+    lab["curve"].write_text('{"step": 4000, "val_bpb": 1.4}' + chr(10), encoding="utf-8")
+    spec = json.loads(lab["spec"].read_text())
+    spec.update({"target_steps": 4_000, "schedule_steps": 16_000})
+    lab["spec"].write_text(json.dumps(spec), encoding="utf-8")
+    set_state(lab["state"], status="paused_at_chunk", paused_step=4_000)
+    h.main()
+    assert capsys.readouterr().out == ""
+
+
+def test_pinned_run_name_selects_current_curve(tmp_path, lab, monkeypatch, capsys):
+    current = tmp_path / "runs" / "active-run"
+    current.mkdir(parents=True)
+    (current / "loss.jsonl").write_text('{"step": 10}' + chr(10))
+    spec = json.loads(lab["spec"].read_text())
+    spec.update({"run_name": "active-run", "target_steps": 100,
+                 "schedule_steps": 200})
+    lab["spec"].write_text(json.dumps(spec))
+    set_state(lab["state"], status="running", checked_at="2999-01-01T00:00:00")
+    monkeypatch.setattr(h, "LAB", str(tmp_path))
+    h.main()
+    assert capsys.readouterr().out == ""

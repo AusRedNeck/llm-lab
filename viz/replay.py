@@ -123,7 +123,7 @@ def main():
     ap.add_argument("--layer", type=int, default=0)
     ap.add_argument("--head", type=int, default=0)
     ap.add_argument("--topk", type=int, default=5)
-    ap.add_argument("--rotary-pct", type=float, default=1.0)
+    ap.add_argument("--rotary-pct", type=float, default=None)
     ap.add_argument("--out", default="viz/replay.html")
     ns = ap.parse_args()
 
@@ -153,12 +153,10 @@ def main():
     for path in files:
         ck = torch.load(path, map_location=device)
         c = ck.get("cfg", {})
+        if ns.rotary_pct is not None:
+            c = {**c, "rotary_pct": ns.rotary_pct}
         ctx = c.get("context_length", 256)
-        m = Transformer(
-            vocab_size=c["vocab_size"], context_length=c["context_length"],
-            embedding_dim=c["embedding_dim"], num_heads=c["num_heads"],
-            num_layers=c["num_layers"], use_rope=c.get("use_rope", True),
-            rotary_pct=ns.rotary_pct, dropout=0.0).to(device)
+        m = Transformer.from_config(c).to(device)
         m.load_state_dict(ck["model"] if "model" in ck else ck)
         name = os.path.basename(path).replace(".pt", "")
         models.append((m, name))

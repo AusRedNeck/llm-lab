@@ -15,25 +15,27 @@ class ModelConfig:
     num_layers: int = 4
     num_heads: int = 4
     dropout: float = 0.0
-    # Pythia / GPT-NeoX parity knobs. Defaults preserve the legacy GPT-2-style
-    # behaviour so existing presets are untouched; the Pythia presets below
-    # override them to match references/pythia-160m/config.json:
-    #   rotary_pct 0.25 (partial RoPE), use_rope True, use_parallel_residual True.
-    rotary_pct: float = 1.0          # fraction of head dims RoPE touches (Pythia=0.25)
-    use_rope: bool = False           # rotary positions instead of learned absolute
+    # Pythia / GPT-NeoX knobs. Defaults preserve the legacy stack; the dedicated
+    # pythia160_2k preset overrides these to match the Pythia-160M reference.
+    rotary_pct: float = 1.0          # fraction of head dims using RoPE (Pythia=0.25)
+    use_rope: bool = False           # enable rotary position encoding in attention
+    use_learned_position_embeddings: bool = True  # legacy; Pythia uses RoPE only
+    lm_head_bias: bool = True          # legacy; GPT-NeoX Pythia output head is bias-free
     parallel_residual: bool = True   # attn + FFN branch from the same normed input
 
     def num_params(self) -> int:
         """Rough parameter count so we know what class we're training."""
-        # embeddings + pos emb + per-layer (attn 4xD^2 + ffn 8xD^2) + final norm + head
+        # embeddings + optional positions + per-layer (attn 4xD^2 + ffn 8xD^2) + norm + head
         d = self.embedding_dim
         per_layer = 4 * d * d + 8 * d * d
+        position_params = self.context_length * d if self.use_learned_position_embeddings else 0
+        head_bias_params = self.vocab_size if self.lm_head_bias else 0
         total = (
             self.vocab_size * d
-            + self.context_length * d
+            + position_params
             + self.num_layers * per_layer
             + 2 * d  # final LayerNorm
-            + d * self.vocab_size + self.vocab_size  # lm_head
+            + d * self.vocab_size + head_bias_params  # lm_head
         )
         return total
 
@@ -153,28 +155,34 @@ L112M_14L768 = ModelConfig(
     dropout=0.1,
 )
 
-# Pythia-160M SHAPE: 12L x 768H x 12 heads x FFN 3072 (64 dims/head).
-# Reference: EleutherAI/pythia-160m (spec + tokenizer in references/pythia-160m/).
-# PARITY as of the 2026-10-01 plan (.hermes/plans/2026-10-01_guard-fix-and-160m-
-# parity.md): partial RoPE (0.25), parallel residual, no dropout, vocab 50304 --
-# every field now matches the vendored references/pythia-160m/config.json.
-# The header used to claim "sequential residual, full RoPE, dropout 0.1", which
-# the config had already stopped being true of; see that plan for why parity beat
-# keeping the capacity series internally consistent. PYTHIA_12L768 below is
-# deliberately still 0.1 -- do not change both in one pass.
-# Built param count is 162,766,464 (162.77M), NOT the 162,257,664 (162.26M) quoted in
-# that plan. The 508,800 gap is real and structural: HF NeoX is RoPE-only with no
-# learned position table and no lm_head bias, while we carry a 512x768 position table
-# (393,216) plus a 50,304-wide output bias. Quote our measured count, not the plan's.
+# Pythia-160M shape: 12L x 768H x 12 heads x FFN 3072 (64 dims/head).
+# The 512-token preset is retained as the historical control. The 2K variant below
+# uses Pythia's 2048 context and RoPE-only positional scheme; other implementation
+# differences (e.g. fused-vs-separate projection layout) remain documented separately.
 PYTHIA160_12L768 = ModelConfig(
-    vocab_size=50304,     # pythia-160m config.json; --tokenizer overrides this anyway
+    vocab_size=50304,
     context_length=512,
     embedding_dim=768,
     num_layers=12,
     num_heads=12,
-    dropout=0.0,          # Pythia-160M has no dropout key => 0.0
-    rotary_pct=0.25,      # Pythia: RoPE on 25% of head dims (config.json)
+    dropout=0.0,
+    rotary_pct=0.25,
     use_rope=True,
+    parallel_residual=True,
+)
+
+# Context- and position-scheme-matched Pythia-160M variant. Preserve the old preset above.
+PYTHIA160_12L768_2K = ModelConfig(
+    vocab_size=50304,
+    context_length=2048,
+    embedding_dim=768,
+    num_layers=12,
+    num_heads=12,
+    dropout=0.0,
+    rotary_pct=0.25,
+    use_rope=True,
+    use_learned_position_embeddings=False,
+    lm_head_bias=False,
     parallel_residual=True,
 )
 

@@ -25,20 +25,23 @@ class InputEmbedding(nn.Module):
             vocab_size: int,
             context_length: int,
             embedding_dim: int,
+            use_learned_position_embeddings: bool = True,
     ):
 
         super().__init__()
 
         self.token_embedding = TokenEmbedding(vocab_size, embedding_dim)
-        self.position_embedding = PositionalEmbedding(context_length, embedding_dim)
+        self.position_embedding = (
+            PositionalEmbedding(context_length, embedding_dim)
+            if use_learned_position_embeddings else None
+        )
 
     def forward(self, tokens):
-        positions = torch.arange(tokens.shape[1], device=tokens.device)
-
         token_vectors = self.token_embedding(tokens)
-        position_vectors = self.position_embedding(positions)
-
-        return token_vectors + position_vectors
+        if self.position_embedding is None:
+            return token_vectors
+        positions = torch.arange(tokens.shape[1], device=tokens.device)
+        return token_vectors + self.position_embedding(positions)
 
 
 
@@ -57,12 +60,16 @@ class Transformer(nn.Module):
         rotary_pct: float = 1.0,
         dropout: float = 0.0,
         parallel_residual: bool = True,
+        use_learned_position_embeddings: bool = True,
+        lm_head_bias: bool = True,
     ):
         super().__init__()
 
         self.use_rope = use_rope
         self.rotary_pct = rotary_pct
         self.parallel_residual = parallel_residual
+        self.use_learned_position_embeddings = use_learned_position_embeddings
+        self.lm_head_bias = lm_head_bias
         # Embedding dropout: same vectors, occasional blind spots in train.
         self.emb_drop = nn.Dropout(dropout)
         # Convert token IDs into vectors that the Transformer can process.
@@ -70,6 +77,7 @@ class Transformer(nn.Module):
             vocab_size=vocab_size,
             context_length=context_length,
             embedding_dim=embedding_dim,
+            use_learned_position_embeddings=use_learned_position_embeddings,
         )
 
         # Stack multiple Transformer blocks.
@@ -96,6 +104,25 @@ class Transformer(nn.Module):
         self.lm_head = nn.Linear(
             embedding_dim,
             vocab_size,
+            bias=lm_head_bias,
+        )
+
+    @classmethod
+    def from_config(cls, config: dict):
+        """Build from preset/checkpoint config; missing new keys stay legacy-safe."""
+        return cls(
+            vocab_size=config["vocab_size"],
+            context_length=config["context_length"],
+            embedding_dim=config["embedding_dim"],
+            num_heads=config["num_heads"],
+            num_layers=config["num_layers"],
+            use_rope=config.get("use_rope", False),
+            rotary_pct=config.get("rotary_pct", 1.0),
+            dropout=config.get("dropout", 0.0),
+            parallel_residual=config.get("parallel_residual", True),
+            use_learned_position_embeddings=config.get(
+                "use_learned_position_embeddings", True),
+            lm_head_bias=config.get("lm_head_bias", True),
         )
 
     def forward(self, tokens):

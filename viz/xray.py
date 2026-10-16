@@ -129,7 +129,7 @@ def main():
     ap.add_argument("--layer", type=int, default=0)
     ap.add_argument("--head", type=int, default=0)
     ap.add_argument("--topk", type=int, default=5)
-    ap.add_argument("--rotary-pct", type=float, default=1.0)
+    ap.add_argument("--rotary-pct", type=float, default=None)
     ap.add_argument("--out", default="viz/xray.html")
     ns = ap.parse_args()
 
@@ -140,12 +140,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(ns.ckpt, map_location=device)
     c = ckpt.get("cfg", {})
+    if ns.rotary_pct is not None:
+        c = {**c, "rotary_pct": ns.rotary_pct}
     sd = ckpt["model"] if "model" in ckpt else ckpt
-    model = Transformer(
-        vocab_size=c["vocab_size"], context_length=c["context_length"],
-        embedding_dim=c["embedding_dim"], num_heads=c["num_heads"],
-        num_layers=c["num_layers"], use_rope=c.get("use_rope", True),
-        rotary_pct=ns.rotary_pct, dropout=0.0).to(device)
+    model = Transformer.from_config(c).to(device)
     model.load_state_dict(sd, strict=True)
 
     tok_path = ns.tokenizer or c.get("tokenizer")

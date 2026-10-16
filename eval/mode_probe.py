@@ -107,18 +107,9 @@ def main() -> None:
     cfg = ckpt["cfg"]
     print(f"ckpt step={ckpt.get('step')} keys={sorted(cfg.keys())}")
 
-    # Checkpoint cfg is truth: same fields train.py built the model with.
-    # rotary_pct is NOT stored (CLI-only) -- 1.0 is train.py's default.
-    model = Transformer(
-        vocab_size=cfg["vocab_size"],
-        context_length=cfg["context_length"],
-        embedding_dim=cfg["embedding_dim"],
-        num_heads=cfg["num_heads"],
-        num_layers=cfg["num_layers"],
-        use_rope=cfg.get("use_rope", False),
-        rotary_pct=cfg.get("rotary_pct", 1.0),
-        dropout=cfg.get("dropout", 0.0),
-    )
+    # Checkpoint cfg is authoritative, including its positional-embedding scheme.
+    model = Transformer.from_config(cfg)
+
     model.cfg_vocab = cfg["vocab_size"]  # scoring needs V, not stored on model
     missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
     print(f"load: missing={len(missing)} unexpected={len(unexpected)}")

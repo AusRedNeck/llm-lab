@@ -56,16 +56,29 @@ def curve_state(path):
     return last, os.path.getmtime(path)
 
 
+def curve_path_for(spec):
+    run_name = spec.get("run_name")
+    if run_name:
+        return os.path.join(LAB, "runs", os.path.basename(run_name), "loss.jsonl")
+    return CURVE
+
+
 def main():
     spec, st = load(SPEC, {}), load(STATE, {})
     target = int(spec.get("target_steps") or 0)
-    step, mtime = curve_state(CURVE)
+    schedule_steps = int(spec.get("schedule_steps", target))
+    step, mtime = curve_state(curve_path_for(spec))
     status = str(st.get("status", "?"))
     now = dt.datetime.now()
     problems = []
 
+    if status == "paused_at_chunk":
+        return 0
     if step is not None and target and step >= target:
-        print(f"COMPLETE: step {step}/{target} - the parity run finished; retire this monitor")
+        if target >= schedule_steps:
+            print(f"COMPLETE: step {step}/{schedule_steps} - final schedule reached; retire this monitor")
+        else:
+            print(f"CHUNK READY: step {step}/{schedule_steps}; waiting for explicit go")
         return 0
 
     where = f"step {step if step is not None else '?'}/{target}"

@@ -39,7 +39,7 @@ import sys
 # Allow `python -m train.train` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, M66M_10L704, PYTHIA_6L256, PYTHIA_6L384, PYTHIA_6L512, PYTHIA_12L768, PYTHIA160_12L768, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
+from model.config import L112M_14L768, L194M_14L1024, M49M_6L384, M50M_10L640, M50M_10L640_1K, M52M_10L640, M60M_10L640, M66M_10L704, PYTHIA_6L256, PYTHIA_6L384, PYTHIA_6L512, PYTHIA_12L768, PYTHIA160_12L768, PYTHIA160_12L768_2K, S11M_6L384, S12M_6L384, S17M_6L384, T1M_4L128
 from model.bpe import BPETokenizer
 
 PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
@@ -53,8 +53,16 @@ PRESETS = {"t1m": T1M_4L128, "s11m": S11M_6L384, "m49m": M49M_6L384,
            "pythia384": PYTHIA_6L384,
            "pythia768": PYTHIA_12L768,
            "pythia160": PYTHIA160_12L768,
+           "pythia160_2k": PYTHIA160_12L768_2K,
            "l194m": L194M_14L1024,
            "l112m": L112M_14L768}
+
+
+def checkpoint_config(cfg, *, use_rope: bool) -> dict:
+    """Serialize the resolved runtime architecture, not CLI overrides alone."""
+    saved = dict(vars(cfg))
+    saved["use_rope"] = bool(use_rope)
+    return saved
 
 
 def load_tokenizer(path: str):
@@ -555,6 +563,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="s11m", choices=list(PRESETS))
     ap.add_argument("--steps", type=int, default=500)
+    ap.add_argument("--stop-at-step", type=int, default=None,
+                    help="pause this segment at an absolute global step; --steps remains the full LR schedule horizon")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--data", default="synthetic", choices=["synthetic", "tinystories"])
@@ -653,6 +663,10 @@ def _train(args):
     import torch
     import torch.nn.functional as F
     from model.transformer import Transformer
+    from train.chunking import (
+        chunk_is_final, resolve_stop_at_step, validate_schedule_horizon,
+    )
+    from train.rng_state import capture_rng_state, make_generator, restore_rng_state
     cfg = PRESETS[args.preset]
     if args.dropout is not None:
         # CLI wins: one variable per run, preset stays the control.
@@ -671,6 +685,8 @@ def _train(args):
     print(f"preset={args.preset} params~{cfg.num_params() / 1e6:.1f}M "
           f"ctx={cfg.context_length} device={device} "
           f"rope={use_rope} rotary_pct={cfg.rotary_pct} "
+          f"learned_pos={cfg.use_learned_position_embeddings} "
+          f"lm_head_bias={cfg.lm_head_bias} "
           f"parallel_residual={cfg.parallel_residual}")
 
     torch.manual_seed(0)
@@ -684,6 +700,8 @@ def _train(args):
         rotary_pct=cfg.rotary_pct,
         dropout=cfg.dropout,
         parallel_residual=cfg.parallel_residual,
+        use_learned_position_embeddings=cfg.use_learned_position_embeddings,
+        lm_head_bias=cfg.lm_head_bias,
     ).to(device)
     model.train()
 
@@ -718,22 +736,32 @@ def _train(args):
     import re
     resume_best_bpb = None
     resume_bad_checks = 0
+    resume_running = None
     resume_stamp = None
     resume_run_name = None
     resume_eval_bpb = None
     if args.resume:
         r = torch.load(args.resume, map_location=device, weights_only=False)
+        validate_schedule_horizon(r.get("schedule_steps"), args.steps)
         rc = r["cfg"]
         for k in ("vocab_size", "context_length", "embedding_dim",
-                  "num_layers", "num_heads"):
-            if rc.get(k) != getattr(cfg, k):
+                  "num_layers", "num_heads", "use_learned_position_embeddings",
+                  "lm_head_bias"):
+            checkpoint_value = rc.get(k, True) if k in (
+                "use_learned_position_embeddings", "lm_head_bias") else rc.get(k)
+            if checkpoint_value != getattr(cfg, k):
                 raise ValueError(
-                    f"resume mismatch: ckpt {k}={rc.get(k)} vs cfg {k}={getattr(cfg, k)} "
+                    f"resume mismatch: ckpt {k}={checkpoint_value} vs cfg {k}={getattr(cfg, k)} "
                     f"(use the same --preset/--tokenizer as the original run)")
         model.load_state_dict(r["model"])
         if "optimizer" in r:
             opt.load_state_dict(r["optimizer"])
+        if restore_rng_state(torch, r.get("rng_state")):
+            print("  training RNG state restored")
+        else:
+            print("  checkpoint has no RNG state; using legacy seed-0 behavior")
         start_step = int(r.get("step", 0))
+        resume_running = r.get("running_avg")
         # Inherit the ledger (new ckpts carry best_bpb; older _best.pt carries val_bpb).
         if r.get("best_bpb") is not None:
             resume_best_bpb = float(r["best_bpb"])
@@ -754,6 +782,8 @@ def _train(args):
         print(f"resumed {args.resume} @ step {start_step} | {_ledger}"
               f" | stamp={resume_stamp} run={resume_run_name}")
 
+    chunk_end_step = resolve_stop_at_step(
+        args.steps, args.stop_at_step, start_step)
     corpus = None
     train_corpus, val_corpus = None, None
     unit = None
@@ -970,7 +1000,7 @@ def _train(args):
             else:
                 ids = list(p.encode("utf-8"))
             x = torch.tensor([ids], dtype=torch.long, device=device)
-            torch.manual_seed(0)
+            sample_generator = make_generator(torch, device, 0)
             with torch.no_grad():
                 for _ in range(80):
                     nxt_logits = model(x[:, -cfg.context_length:])[0, -1] / 0.8
@@ -978,7 +1008,7 @@ def _train(args):
                     probs = F_.softmax(
                         torch.full_like(nxt_logits, float("-inf")).scatter(
                             0, topk.indices, topk.values), dim=-1)
-                    nxt = torch.multinomial(probs, 1)
+                    nxt = torch.multinomial(probs, 1, generator=sample_generator)
                     x = torch.cat([x, nxt.view(1, 1)], dim=1)
             if tok is not None:
                 text = tok.decode([int(i) for i in x[0].tolist()])
@@ -993,7 +1023,7 @@ def _train(args):
 
     pos = [0]
     os.makedirs(args.out, exist_ok=True)
-    running = 0.0
+    running = float(resume_running) if resume_running is not None else 0.0
 
     # Byte-normalised val: the only loss number comparable across vocabularies.
     bpt = val_bytes_per_token(val_corpus, tok) if val_corpus is not None else 1.0
@@ -1046,7 +1076,7 @@ def _train(args):
     peak_mem_mb = 0
     peak_temp = 0
 
-    for step in range(start_step + 1, args.steps + 1):
+    for step in range(start_step + 1, chunk_end_step + 1):
         lr = lr_schedule(step, warmup, args.steps, args.lr)
         for g in opt.param_groups:
             g["lr"] = lr
@@ -1168,8 +1198,7 @@ def _train(args):
                 best_bpb, bad_checks = cand_bpb, 0
                 best_ckpt = os.path.join(
                     args.out, f"exp002_{tag}_{run_stamp}_best.pt")
-                saved_best = dict(vars(cfg))
-                saved_best["use_rope"] = args.use_rope
+                saved_best = checkpoint_config(cfg, use_rope=use_rope)
                 saved_best["tokenizer"] = args.tokenizer
                 saved_best["corpus"] = args.corpus or args.data
                 saved_best["val_bpb"] = val_bpb
@@ -1285,17 +1314,27 @@ def _train(args):
             vstr = f" val={val:.4f} bpb={val_bpb:.4f}" if val else ""
             print(f"step {step:5d}/{args.steps} loss={loss_val:.4f} "
                   f"avg50={running:.4f}{vstr} lr={lr:.1e}", flush=True)
-        if step % 500 == 0 or step == args.steps:
+        if step % 500 == 0 or step == chunk_end_step:
             ckpt = os.path.join(
                 args.out, f"exp002_{tag}_{run_stamp}_step{step}.pt")
-            saved_cfg = dict(vars(cfg))
-            saved_cfg["use_rope"] = use_rope
+            # Marker before checkpoint: if the checkpoint exists, the clean-boundary
+            # event is already durable; a crash before the checkpoint still retries.
+            if step == chunk_end_step and not chunk_is_final(chunk_end_step, args.steps):
+                log_f.write(json.dumps({"chunk_complete": True,
+                                        "step": chunk_end_step,
+                                        "schedule_steps": args.steps}) + chr(10))
+                log_f.flush()
+            saved_cfg = checkpoint_config(cfg, use_rope=use_rope)
             # Generate needs this to speak the same vocab. Bytes runs: None.
             saved_cfg["tokenizer"] = args.tokenizer
             saved_cfg["corpus"] = args.corpus or args.data
             torch.save({"cfg": saved_cfg, "model": model.state_dict(),
                         "optimizer": opt.state_dict(),
                         "step": step,
+                        "schedule_steps": args.steps,
+                        "stop_at_step": chunk_end_step,
+                        "rng_state": capture_rng_state(torch),
+                        "running_avg": running,
                         # Continuity fields: a supervisor reads run_name/stamp to find the
                         # newest checkpoint of THIS logical run, and the trainer restores
                         # the ledger on resume.
@@ -1317,7 +1356,11 @@ def _train(args):
 
     log_f.close()
     _best = "n/a" if best_bpb == float("inf") else f"{best_bpb:.4f}"
-    print(f"done. final avg50 loss={running:.4f}  best bpb={_best}  run dir: {run_path}")
+    if chunk_is_final(chunk_end_step, args.steps) or stop:
+        print(f"done. final avg50 loss={running:.4f}  best bpb={_best}  run dir: {run_path}")
+    else:
+        print(f"chunk complete at step {chunk_end_step}/{args.steps}; "
+              f"awaiting explicit go. run dir: {run_path}")
 
 
 if __name__ == "__main__":

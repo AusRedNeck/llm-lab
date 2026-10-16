@@ -42,15 +42,8 @@ def load_model(ckpt_path, cfg, device):
     # State dict may have 'model' key or be flat
     if "model" in state:
         state = state["model"]
-    model = Transformer(
-        vocab_size=cfg.vocab_size,
-        context_length=cfg.context_length,
-        embedding_dim=cfg.embedding_dim,
-        num_heads=cfg.num_heads,
-        num_layers=cfg.num_layers,
-        use_rope=True,
-        dropout=cfg.dropout,
-    )
+    cfg_dict = cfg if isinstance(cfg, dict) else vars(cfg)
+    model = Transformer.from_config(cfg_dict)
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print(f"  WARNING missing keys: {missing[:5]}")

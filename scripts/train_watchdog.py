@@ -396,8 +396,8 @@ def finished_log(spec, st, spec_path=None):
 
 def run_finished(spec, st, spec_path=None):
     """True when the RUN ITSELF ended deliberately: its early-stop guard fired, it reached
-    target_steps, or the trainer printed its completion line. This is a legitimate end state,
-    NOT a crash -- treating it as 'dead' makes the watchdog relaunch a finished run, which then
+    the global schedule horizon (not an intermediate chunk), or the trainer printed its
+    final completion line. This is a legitimate end state, NOT a crash -- treating it as 'dead' makes the watchdog relaunch a finished run, which then
     aborts again (observed live 2026-09-18: the degrade guard fired at step 8200/20000).
 
     An operator can override it: state["resume_requested"] is set when someone decides
@@ -431,8 +431,10 @@ def run_finished(spec, st, spec_path=None):
             except Exception:
                 pass
         step = curve_step(lj) if os.path.exists(lj) else None
-        if step is not None and step >= spec["target_steps"]:
-            return True, f"reached target_steps ({spec['target_steps']})"
+        target = int(spec.get("target_steps") or 0)
+        schedule_steps = int(spec.get("schedule_steps", target))
+        if step is not None and target >= schedule_steps and step >= target:
+            return True, f"reached schedule horizon ({schedule_steps})"
     log = finished_log(spec, st, spec_path)
     if log:
         return True, f"trainer printed 'done.' in {os.path.basename(log)}"
@@ -502,6 +504,87 @@ def newest_ckpt_step(spec):
                 st = int(m2.group(1))
                 best = st if best is None else max(best, st)
     return best
+
+
+def pin_run_identity(spec, spec_path):
+    """Pin the trainer's self-stamped run before its first checkpoint exists."""
+    if spec.get("run_name") and spec.get("stamp"):
+        return False
+    log = spec.get("log")
+    if not log:
+        return False
+    log_path = log if os.path.isabs(log) else os.path.join(LAB, log)
+    try:
+        with open(log_path, "rb") as stream:
+            stream.seek(max(0, os.path.getsize(log_path) - 65536))
+            text = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return False
+    run_dir = None
+    for line in text.splitlines():
+        if "run dir:" in line:
+            run_dir = line.split("run dir:", 1)[1].strip()
+    if not run_dir:
+        return False
+    run_dir = run_dir.split(" (resumed - appending)", 1)[0]
+    name = os.path.basename(run_dir.replace(chr(92), "/").rstrip("/"))
+    parts = name.split("_", 2)
+    if (len(parts) < 3 or len(parts[0]) != 8 or len(parts[1]) != 4 or
+            not parts[0].isdigit() or not parts[1].isdigit()):
+        return False
+    stamp = parts[0] + parts[1]
+    floor = os.path.getmtime(spec_path)
+    spec.update({"run_name": name, "stamp": stamp})
+    temp_spec = spec_path + ".pin.tmp"
+    with open(temp_spec, "w", encoding="utf-8") as stream:
+        json.dump(spec, stream, indent=2)
+    os.replace(temp_spec, spec_path)
+    os.utime(spec_path, (floor, floor))
+
+    registry_path = os.path.join(LAB, "experiments.json")
+    if os.path.exists(registry_path):
+        try:
+            with open(registry_path, encoding="utf-8") as stream:
+                registry = json.load(stream)
+            row = next((item for item in registry.get("arms", [])
+                        if item.get("id") == spec.get("name")), None)
+            if row is not None:
+                dirs = row.get("run_dirs")
+                if not isinstance(dirs, list):
+                    dirs = []
+                if name not in dirs:
+                    dirs.append(name)
+                    row["run_dirs"] = dirs
+                    temp = registry_path + ".pin.tmp"
+                    with open(temp, "w", encoding="utf-8") as stream:
+                        json.dump(registry, stream, indent=2)
+                    os.replace(temp, registry_path)
+        except Exception as exc:
+            print(f"[watchdog] WARNING: run identity pinned, registry update failed: {exc}")
+    return True
+
+
+def chunk_marker_complete(spec, target):
+    """Require this run's final curve row to certify the boundary, not just reach it."""
+    run_dir = find_run_dir(spec)
+    if not run_dir:
+        return False
+    path = os.path.join(run_dir, "loss.jsonl")
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(max(0, os.path.getsize(path) - 65536))
+            lines = [line for line in stream.read().splitlines() if line.strip()]
+    except OSError:
+        return False
+    if not lines:
+        return False
+    try:
+        row = json.loads(lines[-1].decode("utf-8"))
+    except Exception:
+        return False
+    return (row.get("chunk_complete") is True and
+            row.get("step") == int(target) and
+            row.get("schedule_steps") == int(spec.get("schedule_steps", target)))
 
 
 def newest_step_ckpt(spec, spec_path=None):
@@ -590,6 +673,8 @@ def _main_locked():
               f"Install psutil for this interpreter or repoint cron. No-op this tick.")
         return 1
     if proc is not None:
+        if not dry and pin_run_identity(spec, spec_path):
+            st["run_name"] = spec["run_name"]
         step_now = progress_step(spec)
         note = stuck_note(spec, st, step_now, now)
         if not dry:
@@ -630,16 +715,22 @@ def _main_locked():
     finished, why = run_finished(spec, st, spec_path)
     if finished:
         first_time = not spec.get("completed")
+        normal_completion = (why.startswith("reached schedule horizon") or
+                            why.startswith("trainer printed 'done.'"))
+        verdict = "complete" if normal_completion else "stopped-by-rule"
         if not dry and first_time:
-            st.update({"status": "stopped-by-rule", "final_step": step, "reason": why,
+            st.update({"status": verdict, "final_step": step, "reason": why,
                        "checked_at": now.isoformat(timespec="seconds")})
             save_state(st, STATE)
             spec["completed"] = True
             with open(spec_path, "w", encoding="utf-8") as f:
                 json.dump(spec, f, indent=2)
         if first_time and not quiet:
-            print(f"[watchdog] {spec['name']} ENDED BY ITS OWN RULE at step {step}/{target} "
-                  f"({why}) - no relaunch")
+            if normal_completion:
+                print(f"[watchdog] COMPLETE: {spec['name']} at step {step}/{target} ({why})")
+            else:
+                print(f"[watchdog] {spec['name']} ENDED BY ITS OWN RULE at step {step}/{target} "
+                      f"({why}) - no relaunch")
         # ---- chain: swap in next_job spec and launch (even on early-stop) -----
         if spec.get("completed"):
             next_job = spec.get("next_job")
@@ -657,15 +748,41 @@ def _main_locked():
         return 0
 
     if step is not None and step >= target:
-        if not dry:
-            st.update({"status": "complete", "final_step": step, "completed": True,
-                       "checked_at": now.isoformat(timespec="seconds")})
-            save_state(st, STATE)
-            spec["completed"] = True
-            with open(spec_path, "w", encoding="utf-8") as f:
-                json.dump(spec, f, indent=2)
-        print(f"[watchdog] COMPLETE: {spec['name']} reached step {step}/{target} - no relaunch")
-        return 0
+        schedule_steps = int(spec.get("schedule_steps", target))
+        if target < schedule_steps:
+            boundary_ckpt = newest_step_ckpt(spec, spec_path)
+            marker_ok = chunk_marker_complete(spec, target)
+            if boundary_ckpt and boundary_ckpt[0] == target:
+                already_paused = (st.get("status") == "paused_at_chunk" and
+                                  st.get("paused_step") == target)
+                warning = None if marker_ok else "chunk marker missing"
+                if not dry and not already_paused:
+                    st.update({"status": "paused_at_chunk", "paused_step": target,
+                               "schedule_steps": schedule_steps,
+                               "pause_warning": warning,
+                               "checked_at": now.isoformat(timespec="seconds")})
+                    save_state(st, STATE)
+                if not already_paused:
+                    if warning:
+                        print(f"[watchdog] WARNING: exact step-{target} checkpoint exists but "
+                              f"{warning}; paused for review before next chunk")
+                    else:
+                        print(f"[watchdog] PAUSED AT CHUNK: {spec['name']} at "
+                              f"step {target}/{schedule_steps}; waiting for explicit go")
+                return 0
+            if not quiet:
+                print(f"[watchdog] chunk target {target} reached without an exact boundary checkpoint; "
+                      "treating as incomplete and retrying from latest step ckpt")
+        else:
+            if not dry:
+                st.update({"status": "complete", "final_step": step, "completed": True,
+                           "checked_at": now.isoformat(timespec="seconds")})
+                save_state(st, STATE)
+                spec["completed"] = True
+                with open(spec_path, "w", encoding="utf-8") as f:
+                    json.dump(spec, f, indent=2)
+            print(f"[watchdog] COMPLETE: {spec['name']} reached step {step}/{target} - no relaunch")
+            return 0
 
     if spec.get("completed"):
         # ---- chain: swap in next_job spec and launch --------------------------

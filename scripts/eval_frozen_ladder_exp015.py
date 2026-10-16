@@ -107,15 +107,7 @@ for path in files:
     live_val = st.get("val")
     live_bpb = st.get("val_bpb")
 
-    model = Transformer(
-        vocab_size=cfg["vocab_size"],
-        context_length=cfg["context_length"],
-        embedding_dim=cfg["embedding_dim"],
-        num_heads=cfg["num_heads"],
-        num_layers=cfg["num_layers"],
-        use_rope=bool(cfg.get("use_rope", True)),
-        dropout=cfg.get("dropout", 0.0),
-    )
+    model = Transformer.from_config(cfg)
     model.load_state_dict(sd, strict=True)   # fail loudly on arch drift
     model = model.to(device)
 

@@ -79,11 +79,7 @@ def main():
 
     ck = torch.load(CKPT, map_location="cpu", weights_only=False)
     c = ck["cfg"]
-    ours = Transformer(vocab_size=c["vocab_size"], context_length=c["context_length"],
-                       embedding_dim=c["embedding_dim"], num_heads=c["num_heads"],
-                       num_layers=c["num_layers"], use_rope=True,
-                       rotary_pct=c.get("rotary_pct", 0.25), dropout=0.0,
-                       parallel_residual=c.get("parallel_residual", True)).to(torch.float32)
+    ours = Transformer.from_config(c).to(torch.float32)
     ours.load_state_dict(ck["model"])
     ours.to(dev).eval()
     ref = AutoModelForCausalLM.from_pretrained(WEIGHTS, dtype=torch.float32)
