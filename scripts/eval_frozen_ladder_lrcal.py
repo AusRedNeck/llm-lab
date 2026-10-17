@@ -56,6 +56,11 @@ ap.add_argument("--train", action="store_true",
                 help="Also score a fixed random-train draw set (gap metric).")
 ap.add_argument("--fp32", action="store_true",
                 help="Extra fp32 val pass as a precision cross-check.")
+ap.add_argument("--per-window", action="store_true",
+                help="Also record per-window val CE (reduction='none') so a "
+                     "PAIRED arm-to-arm delta and its SE can be computed from "
+                     "the JSON. Off by default: the default path, estimator "
+                     "and row shape are unchanged.")
 ap.add_argument("--out", default="logs/frozen_ladder_lr_cal.json")
 args = ap.parse_args()
 
@@ -133,20 +138,32 @@ del corpus, train_split, val_split
 from model.transformer import Transformer
 
 
-def score(model, x, y, amp=False):
-    """Mean CE over the fixed windows - mirrors eval_three_way's val arm."""
+def score(model, x, y, amp=False, collect=None):
+    """Mean CE over the fixed windows - mirrors eval_three_way's val arm.
+
+    collect: optional list. When given, each window's mean CE (nats) is
+    appended to it from the SAME forward pass - no extra scoring, and the
+    estimator/return value are byte-identical to the collect=None path.
+    """
     model.eval()
     tot, bs = 0.0, args.batch
     nb = math.ceil(x.shape[0] / bs)
     with torch.no_grad():
         for i in range(0, x.shape[0], bs):
-            xb, yb = x[i:i + bs].to(device), y[i:i + bs].to(device)
+            xb, yb = x[i:i+bs].to(device), y[i:i+bs].to(device)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16,
                                     enabled=amp):
                 logits = model(xb)
                 tot += F.cross_entropy(
                     logits.reshape(-1, logits.shape[-1]),
                     yb.reshape(-1)).item()
+                if collect is not None:
+                    ce = F.cross_entropy(
+                        logits.reshape(-1, logits.shape[-1]),
+                        yb.reshape(-1), reduction="none")
+                    collect.extend(
+                        ce.reshape(yb.shape[0], -1).mean(dim=1)
+                        .float().cpu().tolist())
     return tot / nb
 
 
@@ -170,7 +187,8 @@ for path in files:
     model.load_state_dict(sd, strict=True)   # fail loudly on arch drift
     model = model.to(device)
 
-    v = score(model, vx, vy, use_amp and args.device == "cuda")
+    pw = [] if args.per_window else None
+    v = score(model, vx, vy, use_amp and args.device == "cuda", collect=pw)
     row = {
         "file": name, "step": stepno, "path": path,
         "live_val_at_save": live_val, "live_bpb_at_save": live_bpb,
@@ -178,6 +196,17 @@ for path in files:
         "draws": n_seq, "batch": args.batch, "seed": SEED,
         "device": args.device, "ctx": ctx,
     }
+    if pw:
+        m = sum(pw) / len(pw)
+        var = (sum((z - m) ** 2 for z in pw) / (len(pw) - 1)
+               if len(pw) > 1 else 0.0)
+        row.update({
+            "per_window_val_nats": pw,
+            "per_window_mean_nats": m,
+            "per_window_std_nats": math.sqrt(var),
+            # self-check: array mean minus the estimator this row reports
+            "per_window_mean_minus_val_nats": m - v,
+        })
     if args.train and tx is not None:
         t = score(model, tx, ty, use_amp and args.device == "cuda")
         row.update(train_nats=t, train_bpb=t * fac, gap_nats=t - v)
