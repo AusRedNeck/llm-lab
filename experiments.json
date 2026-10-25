@@ -115,7 +115,7 @@
       },
       "goal": "16k LR ladder rung (beyond bracket).",
       "verdict": "fail",
-      "note": "1.7433 \u2014 past the knee, ladder bracketed at 3e-3."
+      "note": "1.7433 — past the knee, ladder bracketed at 3e-3."
     },
     {
       "id": "p50k-lr-1e-3",
@@ -161,7 +161,7 @@
       },
       "goal": "50k 70M LR probe rung.",
       "verdict": "closed",
-      "note": "1.7466 \u2014 worse than 1.5e-3, curve turning."
+      "note": "1.7466 — worse than 1.5e-3, curve turning."
     },
     {
       "id": "p50k-lr-3e-3",
@@ -176,7 +176,7 @@
       },
       "goal": "50k 70M LR probe rung (bracket test).",
       "verdict": "fail",
-      "note": "2.5025 \u2014 degenerate plateau, ladder bracketed, 1.5e-3 selected for exp015."
+      "note": "2.5025 — degenerate plateau, ladder bracketed, 1.5e-3 selected for exp015."
     },
     {
       "id": "exp014-m50m-50k",
@@ -206,9 +206,9 @@
         "dropout": "null -> 0.1 declared (NO-OP: preset default was already 0.1)",
         "note": "long extension of the winning probe arm"
       },
-      "goal": "Capacity axis rung 1: SMALLER trunk on 50k \u2014 is the m50m failure shape-specific?",
+      "goal": "Capacity axis rung 1: SMALLER trunk on 50k — is the m50m failure shape-specific?",
       "verdict": "pass",
-      "note": "Best 1.4699 @12000 (frozen audit 1.4692), stopped 15000. Clean successor of the 1.5e-3 probe (same preset/lr/eff/vocab). Its superiority vs exp014 is the confounded preset+lr+eff_batch comparison across those two arms \u2014 see exp014 note.",
+      "note": "Best 1.4699 @12000 (frozen audit 1.4692), stopped 15000. Clean successor of the 1.5e-3 probe (same preset/lr/eff/vocab). Its superiority vs exp014 is the confounded preset+lr+eff_batch comparison across those two arms — see exp014 note.",
       "accepted_confounded": true
     },
     {
@@ -258,7 +258,7 @@
       },
       "goal": "Single-lever (architecture parity) re-run of the collapsed 160M arm. Questions: survive step 4000? beat 70M frozen 1.4692?",
       "verdict": "pass",
-      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure \u2014 clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) \u2014 neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
+      "note": "VERDICT 2026-09-23 15:00: fix CONFIRMED as crash-cure — clean train descent to 2.875, no eval nulls, no plateau, guard fired properly. But capacity answer is NO: best 1.5890 @2100 (~69M tok), early-stop at 4700 (val 1.8546 > best+15% while TRAIN still falling = classic overfit-at-hot-LR mid-schedule, NOT a collapse). 160M still loses to 70M champion 1.4699@12000. Pattern across all three 50k long arms: val bottoms at 130-2400 steps then climbs while train descends; the 70M's improvement lived in its ANNEALING phase (lr decay after step ~7000) — neither 160M arm ever got there before the guard aborted it. Next hypothesis: schedule-length, not size. Collision note (attempt 1/1312) kept below."
     },
     {
       "id": "p160-lr-5e-4",
@@ -272,7 +272,7 @@
       },
       "goal": "160M LR probe (1000 steps, eff64).",
       "verdict": "pass",
-      "note": "1.7280 bpb @1000 \u2014 only sane rung; selected for the long arms."
+      "note": "1.7280 bpb @1000 — only sane rung; selected for the long arms."
     },
     {
       "id": "p160-lr-1e-3",
@@ -286,7 +286,7 @@
       },
       "goal": "160M LR probe rung.",
       "verdict": "fail",
-      "note": "2.4876 \u2014 degenerate plateau."
+      "note": "2.4876 — degenerate plateau."
     },
     {
       "id": "p160-lr-15e-4",
@@ -300,7 +300,7 @@
       },
       "goal": "160M LR probe rung.",
       "verdict": "fail",
-      "note": "2.4878 \u2014 same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack \u2014 open question."
+      "note": "2.4878 — same plateau. Note: all THREE probes ran PRE-FIX; 5e-4 may not be the winner on the fixed stack — open question."
     },
     {
       "id": "m66m-4p5gb-40k",
@@ -503,8 +503,8 @@
         "lr": "3e-4"
       },
       "goal": "LR calibration A: compare LR=3e-4 against 2e-4 under the same 16000-step global cosine, ending at global step 6000; same Pythia160_2k, Pile cache, effective batch, warmup, eval cadence and seed; choose via final full-period envelope and retain uncertainty",
-      "verdict": "running",
-      "note": ""
+      "verdict": "inconclusive",
+      "note": "VERDICT FIRED 2026-10-17 by frozen-ladder external harness (640 windows, seed 1234, ctx 2048, bpt 4.046927). Both arms scored at step 6000 checkpoint on disk. arm A(3e-4)=1.209633 bpb, arm B(2e-4)=1.243623 bpb, delta B-A=+0.033991 (95% CI +0.0331..+0.0349). Excludes 0 but <0.05 conservative floor; direction favors 3e-4 but NO winner crowned. In-loop tail (steps 5600-6000): A final/mean=1.32634/1.28008, B=1.36762/1.31722. Both arms paused at chunk boundary (step 6000/16000). NEXT: Shane decides whether to invest GPU chunk 2 (6000-16000) or accept uncertainty and proceed with 3e-4. Evidence: logs/frozen_ladder_lr_cal_verdict.json. train_job.json: completed=false, next_job=null, chunk_index=1 (paused, not finished)."
     },
     {
       "id": "p160-2k-lr-cal-2e-4",
@@ -517,8 +517,8 @@
         "lr": "3e-4->2e-4"
       },
       "goal": "LR calibration B: compare LR=2e-4 against 3e-4 under the same 16000-step global cosine, ending at global step 6000; identical Pythia160_2k, Pile cache, effective batch, warmup, eval cadence and seed as p160-2k-lr-cal-3e-4 (single lever: lr); choose via final full-period envelope and retain uncertainty",
-      "verdict": "running",
-      "note": ""
+      "verdict": "inconclusive",
+      "note": "VERDICT FIRED 2026-10-17 by frozen-ladder external harness (640 windows, seed 1234, ctx 2048, bpt 4.046927). Both arms scored at step 6000 checkpoint on disk. arm A(3e-4)=1.209633 bpb, arm B(2e-4)=1.243623 bpb, delta B-A=+0.033991 (95% CI +0.0331..+0.0349). Excludes 0 but <0.05 conservative floor; direction favors 3e-4 but NO winner crowned. In-loop tail (steps 5600-6000): A final/mean=1.32634/1.28008, B=1.36762/1.31722. Both arms paused at chunk boundary (step 6000/16000). NEXT: Shane decides whether to invest GPU chunk 2 (6000-16000) or accept uncertainty and proceed with 3e-4. Evidence: logs/frozen_ladder_lr_cal_verdict.json. train_job.json: completed=false, next_job=null, chunk_index=1 (paused, not finished)."
     }
   ],
   "legacy_cutoff": "20260921",
