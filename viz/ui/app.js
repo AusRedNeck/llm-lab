@@ -176,13 +176,19 @@ async function api(path, options={}) {
 }
 function showModelStatus(state) {
   const loaded=!!state.loaded;
-  $("model-badge").textContent=loaded?`MODEL LOADED · ${state.kind==="huggingface"?"OPEN WEIGHTS":"LAB CHECKPOINT"} · ${String(state.device).toUpperCase()}`:"NO MODEL LOADED";
+  const dtype=state.dtype?` · ${state.dtype}`:"";
+  const context=state.config?.context_length||"?";
+  const native=state.config?.native_context_length;
+  const contextLabel=native&&native!==context?`ctx ${context} / native ${native}`:`ctx ${context}`;
+  const memory=state.device==="mps"&&state.mps_memory
+    ?` · MPS ${((state.mps_memory.driver_allocated_bytes||0)/1073741824).toFixed(1)}/${((state.mps_memory.recommended_max_bytes||0)/1073741824).toFixed(1)} GiB`:"";
+  $("model-badge").textContent=loaded?`MODEL LOADED · ${state.kind==="huggingface"?"OPEN WEIGHTS":"LAB CHECKPOINT"} · ${String(state.device).toUpperCase()}${dtype}`:"NO MODEL LOADED";
   $("load-model").disabled=!!state.generating;
   $("unload-model").disabled=!loaded||!!state.generating;
   $("generate-button").disabled=!loaded||generationBusy||!!state.generating;
   $("inspect-trace").disabled=!loaded||!!state.generating;
-  $("compare-checkpoints").disabled=!thinkReady||!!state.generating||state.device==="cuda";
-  $("model-status").textContent=loaded?`${state.checkpoint_id} · ${state.device} · ${state.config?.num_layers||"?"} layers · ctx ${state.config?.context_length||"?"}`:"Choose a trusted local checkpoint. CUDA holds the training lock until unload.";
+  $("compare-checkpoints").disabled=!thinkReady||!!state.generating||(loaded&&state.device!=="cpu");
+  $("model-status").textContent=loaded?`${state.checkpoint_id} · ${state.device}${dtype} · ${state.config?.num_layers||"?"} layers · ${contextLabel}${memory}`:"Choose a trusted local model. CUDA and MPS hold the training lock until unload.";
 }
 async function loadThink() {
   $("think-notice").textContent="Scanning local checkpoints and device availability…";
@@ -198,11 +204,16 @@ async function loadThink() {
     if(upstream)compareB.value=upstream.id;
     const preferred=own;
     if(preferred)select.value=preferred.id;
+    const mps=Array.from($("device-select").options).find(o=>o.value==="mps");
+    mps.disabled=!devices.mps_available||devices.training_busy;
+    mps.textContent=!devices.mps_available?"MPS · unavailable":devices.training_busy?"MPS · training busy":"MPS · available";
     const cuda=Array.from($("device-select").options).find(o=>o.value==="cuda");
     cuda.disabled=!devices.cuda_available||devices.training_busy;
     cuda.textContent=!devices.cuda_available?"CUDA · unavailable":devices.training_busy?"CUDA · training busy":"CUDA · available";
+    if(state.loaded&&state.device)$("device-select").value=state.device;
+    else if(devices.mps_available&&!devices.training_busy)$("device-select").value="mps";
     thinkReady=true;showModelStatus(state);$("think-notice").classList.remove("error");
-    $("think-notice").textContent=devices.training_busy?"A training process owns the GPU. CPU inference remains available.":"Fast generation is ready when a model is loaded.";
+    $("think-notice").textContent=devices.training_busy?"A training process owns the shared accelerator. CPU inference remains available.":"Fast generation is ready when a model is loaded.";
   }catch(error){$("think-notice").textContent=`Think workbench unavailable: ${error.message}`;$("think-notice").classList.add("error");}
 }
 async function compareCheckpoints() {
@@ -323,12 +334,17 @@ async function refreshThinkStatus() {
   try {
     const [state, devices] = await Promise.all([api("/api/model/status"), api("/api/devices")]);
     showModelStatus(state);
+    const mps=Array.from($("device-select").options).find(o=>o.value==="mps");
+    if(mps) {
+      mps.disabled=!devices.mps_available||devices.training_busy;
+      mps.textContent=!devices.mps_available?"MPS · unavailable":devices.training_busy?"MPS · training busy":"MPS · available";
+    }
     const cuda=Array.from($("device-select").options).find(o=>o.value==="cuda");
     if(cuda) {
       cuda.disabled=!devices.cuda_available||devices.training_busy;
       cuda.textContent=!devices.cuda_available?"CUDA · unavailable":devices.training_busy?"CUDA · training busy":"CUDA · available";
     }
-    $("think-notice").textContent=devices.training_busy?"A training process owns the GPU. CPU inference remains available.":"Fast generation is ready when a model is loaded.";
+    $("think-notice").textContent=devices.training_busy?"A training process owns the shared accelerator. CPU inference remains available.":"Fast generation is ready when a model is loaded.";
     $("think-notice").classList.remove("error");
   } catch(error) {
     $("think-notice").textContent=`Think workbench unavailable: ${error.message}`;
@@ -674,7 +690,10 @@ async function refreshNeuroStatus() {
       badge.textContent = state.checkpoint_id || "MODEL LOADED";
       badge.classList.add("good");
       $("neuro-inspect").disabled = false;
-      $("neuro-notice").textContent = "Opt-in on-demand forward pass — attention is a routing measurement, not causal proof.";
+      const openWeights = neuroTrace?.capture_kind.includes("open-weights");
+      $("neuro-notice").textContent = openWeights
+        ? `${state.checkpoint_id || "model"} · open-weights backend — attention and hiddens only; FFN somata show as dashed "not exposed".`
+        : "Opt-in on-demand forward pass — attention is a routing measurement, not causal proof.";
       $("neuro-notice").classList.remove("error");
     } else {
       badge.textContent = "NO MODEL LOADED";

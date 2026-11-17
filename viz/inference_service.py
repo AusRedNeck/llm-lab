@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import json
 import math
 import threading
 import uuid
@@ -14,39 +15,96 @@ MAX_NEW_TOKENS = 128
 OPEN_WEIGHT_SOURCES = {
     "hf:pythia70m-step1000": ("data/incoming/pythia70m_step1000", "EleutherAI Pythia-70M / step 1000"),
     "hf:pythia70m-reference": ("data/incoming/pythia70m_weights", "EleutherAI Pythia-70M / reference weights"),
+    "hf:qwen3-1.7b": ("data/incoming/qwen3-1.7b", "Qwen3-1.7B / instruction tuned"),
+}
+OPEN_WEIGHT_RUNTIME_CONTEXT = 4096
+QWEN3_17B_CONFIG = {
+    "architectures": ["Qwen3ForCausalLM"], "model_type": "qwen3",
+    "vocab_size": 151936, "hidden_size": 2048, "intermediate_size": 6144,
+    "num_hidden_layers": 28, "num_attention_heads": 16,
+    "num_key_value_heads": 8, "max_position_embeddings": 40960,
+    "torch_dtype": "bfloat16",
 }
 
 
+def _contained_model_file(folder, relative, description):
+    if not isinstance(relative, str) or not relative or chr(92) in relative:
+        raise ValueError(f"open-weight {description} path is invalid")
+    candidate = (folder / relative).resolve()
+    if folder not in candidate.parents or not candidate.is_file():
+        raise ValueError(f"open-weight {description} is missing or outside the model directory: {relative}")
+    return candidate
+
+
+def _snapshot_weight_files(folder):
+    index = folder / "model.safetensors.index.json"
+    if index.exists() or index.is_symlink():
+        index = _contained_model_file(folder, index.name, "shard index")
+        try:
+            manifest = json.loads(index.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("open-weight shard index is unreadable") from exc
+        weight_map = manifest.get("weight_map") if isinstance(manifest, dict) else None
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ValueError("open-weight shard index has no weight_map")
+        names = set()
+        for name in weight_map.values():
+            if not isinstance(name, str) or not name.endswith(".safetensors"):
+                raise ValueError("open-weight shard index contains an invalid shard name")
+            names.add(name)
+        return [_contained_model_file(folder, name, "shard") for name in sorted(names)]
+    for name in ("model.safetensors", "pytorch_model.bin"):
+        candidate = folder / name
+        if candidate.is_file():
+            return [_contained_model_file(folder, name, "weights")]
+    raise ValueError("open-weight model weights or shard index are missing")
+
+
+def _validate_open_weight_snapshot(folder, model_id=None):
+    if not folder.is_dir():
+        raise ValueError("open-weight model is not available locally")
+    config_path = _contained_model_file(folder, "config.json", "config")
+    _contained_model_file(folder, "tokenizer.json", "tokenizer")
+    if model_id == "hf:qwen3-1.7b":
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Qwen3-1.7B config is unreadable") from exc
+        for key, expected in QWEN3_17B_CONFIG.items():
+            if config.get(key) != expected:
+                raise ValueError(f"Qwen3-1.7B config mismatch for {key}: expected {expected!r}")
+    return _snapshot_weight_files(folder)
+
+
 def open_weight_catalog(project_root=LAB_ROOT):
-    """List only the explicitly approved local Hugging Face model folders."""
+    """List only explicitly approved, complete local Hugging Face snapshots."""
     root = Path(project_root).resolve()
     items = []
     for model_id, (relative, label) in OPEN_WEIGHT_SOURCES.items():
         folder = (root / relative).resolve()
         if root not in folder.parents:
             continue
-        weights = next((p for p in (folder / "model.safetensors", folder / "pytorch_model.bin") if p.is_file()), None)
-        if not weights or not (folder / "config.json").is_file() or not (folder / "tokenizer.json").is_file():
+        try:
+            weights = _validate_open_weight_snapshot(folder, model_id)
+            size_bytes = sum(path.stat().st_size for path in weights)
+        except (OSError, ValueError):
             continue
-        stat = weights.stat()
+        modified = max(path.stat().st_mtime for path in weights)
         items.append({"id": model_id, "label": label, "kind": "huggingface",
-                      "size_bytes": stat.st_size,
-                      "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds")})
+                      "size_bytes": size_bytes,
+                      "modified_at": datetime.fromtimestamp(modified).astimezone().isoformat(timespec="seconds")})
     return items
 
 
 def resolve_open_weight(model_id, project_root=LAB_ROOT):
-    """Resolve one approved HF model ID to a local, complete model directory."""
+    """Resolve an approved local HF model after validating every indexed shard."""
     if model_id not in OPEN_WEIGHT_SOURCES:
         raise ValueError("choose an open-weight model from the local catalog")
     root = Path(project_root).resolve()
     folder = (root / OPEN_WEIGHT_SOURCES[model_id][0]).resolve()
-    if root not in folder.parents or not folder.is_dir():
-        raise ValueError("open-weight model is not available locally")
-    if not (folder / "config.json").is_file() or not (folder / "tokenizer.json").is_file():
-        raise ValueError("open-weight model is missing config or tokenizer")
-    if not any((folder / name).is_file() for name in ("model.safetensors", "pytorch_model.bin")):
-        raise ValueError("open-weight model weights are missing")
+    if root not in folder.parents:
+        raise ValueError("open-weight model path escapes the project root")
+    _validate_open_weight_snapshot(folder, model_id)
     return folder
 
 
@@ -78,28 +136,82 @@ def resolve_checkpoint(checkpoint_id, root=CHECKPOINT_ROOT):
     return path
 
 
+def _encode_prompt(prompt, tokenizer, config):
+    if tokenizer is None:
+        return list(prompt.encode("utf-8"))
+    if config.get("use_chat_template") and callable(getattr(tokenizer, "apply_chat_template", None)):
+        encoded = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}], tokenize=True,
+            add_generation_prompt=True, enable_thinking=False)
+        token_ids = encoded.get("input_ids") if isinstance(encoded, dict) else getattr(encoded, "input_ids", encoded)
+        if token_ids is None:
+            raise ValueError("tokenizer chat template returned no input_ids")
+        if len(token_ids) and isinstance(token_ids[0], (list, tuple)):
+            token_ids = token_ids[0]
+        return list(token_ids)
+    return list(tokenizer.encode(prompt))
+
+
+def _probe_mps_dtype(torch):
+    """Choose the first low-precision dtype that supports Qwen3-1.7B core ops."""
+    failures = []
+    for dtype in (torch.bfloat16, torch.float16):
+        x = projection = hidden = q = k = weights = None
+        try:
+            x = torch.randn((1, 2048), device="mps", dtype=dtype)
+            projection = torch.randn((6144, 2048), device="mps", dtype=dtype)
+            hidden = torch.nn.functional.layer_norm(
+                torch.nn.functional.linear(x, projection), (6144,))
+            q = torch.randn((1, 16, 128, 128), device="mps", dtype=dtype)
+            k = torch.randn((1, 16, 128, 128), device="mps", dtype=dtype)
+            weights = torch.softmax(torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(128), dim=-1)
+            torch.mps.synchronize()
+            if not bool(torch.isfinite(hidden).all().item() and torch.isfinite(weights).all().item()):
+                raise RuntimeError("MPS produced non-finite values")
+            return dtype
+        except Exception as exc:
+            failures.append(f"{dtype}: {exc}")
+        finally:
+            del x, projection, hidden, q, k, weights
+            torch.mps.empty_cache()
+    raise RuntimeError("MPS has no working BF16/FP16 path for Qwen3 ops: " + "; ".join(failures))
+
+
 def load_open_weight_model(folder, device):
-    """Load one pinned, already-local HF model without any repository download."""
+    """Load one complete local HF snapshot; MPS uses verified low precision."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    model = AutoModelForCausalLM.from_pretrained(
-        str(folder), local_files_only=True, trust_remote_code=False,
-        low_cpu_mem_usage=True, attn_implementation="eager")
+    load_kwargs = {"local_files_only": True, "trust_remote_code": False,
+                   "low_cpu_mem_usage": True, "attn_implementation": "eager"}
+    selected_dtype = None
+    if device == "mps":
+        selected_dtype = _probe_mps_dtype(torch)
+        load_kwargs["dtype"] = selected_dtype
+        load_kwargs["device_map"] = {"": "mps"}
+    model = AutoModelForCausalLM.from_pretrained(str(folder), **load_kwargs)
     if device == "cpu":
         model = model.to(dtype=torch.float32)
-    model = model.to(torch.device(device)).eval()
+    elif device == "cuda":
+        model = model.to(torch.device(device))
+    model = model.eval()
     tokenizer = AutoTokenizer.from_pretrained(
         str(folder), local_files_only=True, use_fast=True, trust_remote_code=False)
     cfg = model.config
+    native_context = int(getattr(cfg, "max_position_embeddings", 512))
+    num_heads = int(cfg.num_attention_heads)
     config = {"vocab_size": int(cfg.vocab_size),
-              "context_length": int(getattr(cfg, "max_position_embeddings", 512)),
+              "context_length": min(native_context, OPEN_WEIGHT_RUNTIME_CONTEXT),
+              "native_context_length": native_context,
               "embedding_dim": int(cfg.hidden_size),
               "num_layers": int(cfg.num_hidden_layers),
-              "num_heads": int(cfg.num_attention_heads),
+              "num_heads": num_heads,
+              "num_key_value_heads": int(getattr(cfg, "num_key_value_heads", num_heads) or num_heads),
               "use_rope": True,
               "tokenizer": str(Path(folder) / "tokenizer.json"),
-              "source": "huggingface-open-weights"}
+              "source": "huggingface-open-weights",
+              "use_chat_template": bool(getattr(tokenizer, "chat_template", None)),
+              "dtype": str(selected_dtype or next(model.parameters()).dtype)}
     return model, config, tokenizer
 
 
@@ -150,17 +262,32 @@ class InferenceService:
 
     def status(self):
         with self._state_lock:
+            model_dtype = None
+            if self._model is not None:
+                try:
+                    model_dtype = str(next(self._model.parameters()).dtype)
+                except (AttributeError, StopIteration):
+                    model_dtype = self._config.get("dtype") if self._config else None
+            import torch
+            mps_available = (hasattr(torch.backends, "mps")
+                             and torch.backends.mps.is_available())
+            mps_memory = None
+            if self._device == "mps" or mps_available:
+                mps_memory = {"current_allocated_bytes": torch.mps.current_allocated_memory(),
+                              "driver_allocated_bytes": torch.mps.driver_allocated_memory(),
+                              "recommended_max_bytes": torch.mps.recommended_max_memory()}
             return {"loaded": self._model is not None,
                     "checkpoint_id": self._checkpoint_id, "device": self._device,
-                    "kind": self._kind,
+                    "dtype": model_dtype, "kind": self._kind, "mps_memory": mps_memory,
                     "config": self._public_config(self._config) if self._config else None,
                     "generating": self._active_generation is not None,
                     "generation_id": self._active_generation}
 
     @staticmethod
     def _public_config(config):
-        keys = ("vocab_size", "context_length", "embedding_dim", "num_layers",
-                "num_heads", "use_rope", "rotary_pct", "parallel_residual", "tokenizer")
+        keys = ("vocab_size", "context_length", "native_context_length",
+                "embedding_dim", "num_layers", "num_heads", "num_key_value_heads",
+                "use_rope", "rotary_pct", "parallel_residual", "tokenizer")
         return {key: config[key] for key in keys if key in config}
 
     def devices(self):
@@ -176,8 +303,12 @@ class InferenceService:
                 probe.release()
             except TrainLockError:
                 busy = True
+        mps_available = (hasattr(torch.backends, "mps")
+                         and torch.backends.mps.is_available())
         return {"cpu_available": True, "cuda_available": torch.cuda.is_available(),
-                "training_busy": busy, "cuda_held_by_visualizer": held_by_visualizer}
+                "mps_available": mps_available, "training_busy": busy,
+                "cuda_held_by_visualizer": held_by_visualizer and self._device == "cuda",
+                "mps_held_by_visualizer": held_by_visualizer and self._device == "mps"}
 
     def _tokenizer_path(self, value):
         if not value:
@@ -192,11 +323,14 @@ class InferenceService:
         is_hf = checkpoint_id in OPEN_WEIGHT_SOURCES
         path = (resolve_open_weight(checkpoint_id, self.project_root) if is_hf
                 else resolve_checkpoint(checkpoint_id, self.checkpoint_root))
-        if device not in ("cpu", "cuda"):
-            raise ValueError("device must be cpu or cuda")
+        if device not in ("cpu", "cuda", "mps"):
+            raise ValueError("device must be cpu, cuda, or mps")
         import torch
         if device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA is not available in this environment")
+        if device == "mps" and not (hasattr(torch.backends, "mps")
+                                     and torch.backends.mps.is_available()):
+            raise RuntimeError("MPS is not available in this environment")
         with self._state_lock:
             if self._active_generation:
                 raise RuntimeError("wait for the current generation before switching models")
@@ -204,12 +338,13 @@ class InferenceService:
                 return self.status()
             self._release_gpu_lock()
             self._clear_model()
-            if device == "cuda":
+            if device in ("cuda", "mps"):
                 from train.runtime_lock import acquire_train_lock
                 self._gpu_lock = acquire_train_lock(
                     path=self.train_lock_path,
-                    owner={"role": "llm-observatory-inference", "checkpoint": checkpoint_id},
-                    label="GPU inference")
+                    owner={"role": "llm-observatory-inference", "checkpoint": checkpoint_id,
+                           "device": device},
+                    label=f"{device.upper()} inference")
             try:
                 if is_hf:
                     model, config, tokenizer = load_open_weight_model(path, device)
@@ -295,7 +430,7 @@ class InferenceService:
             if self._active_generation:
                 raise RuntimeError("wait for the current generation before inspecting a trace")
             model, tokenizer, config, device, kind = self._model, self._tokenizer, self._config, self._device, self._kind
-        token_ids = list(tokenizer.encode(prompt)) if tokenizer else list(prompt.encode("utf-8"))
+        token_ids = _encode_prompt(prompt, tokenizer, config)
         if not token_ids:
             raise ValueError("prompt produced no tokens")
         if len(token_ids) > max_context:
@@ -317,10 +452,13 @@ class InferenceService:
                 captures = {"attentions": result.attentions,
                             "hidden_states": result.hidden_states,
                             "capture_kind": "open-weights-attention-hidden"}
+        trace_config = config if isinstance(config, dict) else {}
         trace = build_trace(captures, token_ids, labels,
-                            selected_index=selected, max_context=max_context)
+                            selected_index=selected, max_context=max_context,
+                            expected_layers=trace_config.get("num_layers"),
+                            expected_heads=trace_config.get("num_heads"))
         trace["checkpoint_id"] = self._checkpoint_id
-        trace["tokenizer"] = config.get("tokenizer")
+        trace["tokenizer"] = trace_config.get("tokenizer")
         return trace
 
     def compare_checkpoints(self, value):
@@ -344,15 +482,15 @@ class InferenceService:
             if self._active_generation:
                 raise RuntimeError("wait for the current generation before comparing checkpoints")
             original_id, original_device = self._checkpoint_id, self._device
-            if original_device == "cuda":
-                raise RuntimeError("checkpoint comparison is CPU-only; unload the CUDA model first")
+            if original_device in ("cuda", "mps"):
+                raise RuntimeError("checkpoint comparison is CPU-only; unload the accelerator model first")
             summaries = []
             try:
                 self.unload()
                 for checkpoint_id in ids:
                     self.load(checkpoint_id, "cpu")
                     model, tokenizer, config = self._model, self._tokenizer, self._config
-                    tokens = list(tokenizer.encode(prompt)) if tokenizer else list(prompt.encode("utf-8"))
+                    tokens = _encode_prompt(prompt, tokenizer, config)
                     if not tokens:
                         raise ValueError("prompt produced no tokens")
                     cap = min(128, int(config["context_length"]))
@@ -385,9 +523,12 @@ class InferenceService:
         return {"prompt": prompt, "token_ids_match": same_tokens,
                 "same_top_prediction": same_prediction, "models": summaries}
 
-    def _decode_ids(self, ids, tokenizer):
+    def _decode_ids(self, ids, tokenizer, *, skip_special_tokens=False):
         if tokenizer is not None:
-            return tokenizer.decode(ids)
+            try:
+                return tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+            except TypeError:
+                return tokenizer.decode(ids)
         return bytes(int(token) % 256 for token in ids).decode("utf-8", errors="replace")
 
     def _run_generation(self, task_id, options):
@@ -395,7 +536,7 @@ class InferenceService:
             import torch
             with self._state_lock:
                 model, tokenizer, config, device = self._model, self._tokenizer, self._config, self._device
-            ids = list(tokenizer.encode(options["prompt"])) if tokenizer else list(options["prompt"].encode("utf-8"))
+            ids = _encode_prompt(options["prompt"], tokenizer, config)
             context = int(config["context_length"])
             truncated = len(ids) > context
             ids = ids[-context:]
@@ -404,7 +545,7 @@ class InferenceService:
             if min(ids) < 0 or max(ids) >= int(config["vocab_size"]):
                 raise ValueError("tokenizer produced an id outside the checkpoint vocabulary")
             x = torch.tensor([ids], dtype=torch.long, device=device)
-            output_ids = ids[:]
+            generated_ids = []
             generator = torch.Generator(device=device).manual_seed(options["seed"])
             task = self._generations[task_id]
             task["prompt_tokens"] = len(ids)
@@ -433,9 +574,9 @@ class InferenceService:
                     top = [{"id": int(tid.item()), "text": self._decode_ids([int(tid.item())], tokenizer),
                             "probability": float(prob.item())}
                            for prob, tid in zip(top_probs, top_ids)]
-                prior = self._decode_ids(output_ids, tokenizer)
-                output_ids.append(token_id)
-                text = self._decode_ids(output_ids, tokenizer)
+                prior = self._decode_ids(generated_ids, tokenizer, skip_special_tokens=True)
+                generated_ids.append(token_id)
+                text = self._decode_ids(generated_ids, tokenizer, skip_special_tokens=True)
                 piece = text[len(prior):] if text.startswith(prior) else text
                 event = {"step": step + 1, "token_id": token_id, "token": piece,
                          "probability": chosen, "entropy": entropy, "top": top}

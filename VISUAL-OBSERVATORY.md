@@ -40,6 +40,62 @@ pipeline's tokenizer dispatch for generation. Checkpoint loading validates
 checkpoint IDs against the checkpoint root; do not treat that as a reason to
 place untrusted checkpoint files in the directory.
 
+## Open-weight models on Apple MPS
+
+The active target is Qwen3-1.7B, registered as `hf:qwen3-1.7b` from
+`data/incoming/qwen3-1.7b/`. Its pinned revision is
+`70d244cc86ccca08cf5af4e1e306ecf908b1ad5e` (Apache-2.0); both safetensors
+shards match the Hub SHA-256 metadata. The config identifies a 28-layer
+`Qwen3ForCausalLM`: hidden 2048, intermediate 6144, 16 query heads, 8 KV heads,
+vocab 151936, native context 40960.
+
+Qwen3-4B was the initial size target. It loaded on this 24 GB Mac in BF16, but
+swap grew by about 6.5 GiB against the predeclared <1 GiB gate in the first trial,
+which began with 2.5 GiB already in use. After background memory pressure eased,
+a guarded retry on 2026-11-16 loaded the same snapshot as BF16 on MPS, generated
+8 tokens, and unloaded cleanly: swap started at 1,125.25 MiB and showed no growth;
+memory-pressure free fell from 82% to 48% during load/generation and recovered to
+81%; MPS driver allocation peaked at 8,054,128,640 bytes and returned to 851,968
+bytes after unload. The retry passed the load/generation gate under that observed
+system state; it does not prove long-context or Think/Neuro trace behavior for 4B.
+It was unloaded before further inference; its verified files remain local with
+measurements in `data/incoming/qwen3-4b/model-manifest.json`.
+
+The catalog validates `model.safetensors.index.json`, the Qwen config, and every
+referenced shard. Missing shards, traversal paths, and symlinks outside the
+model directory keep the snapshot out of the catalog. Loading is local-only
+with `trust_remote_code=False`.
+
+On MPS, the loader probes BF16 then FP16 using Qwen3-1.7B-sized projection,
+norm, and attention-softmax operations. It loads in the supported low
+precision and holds the shared trainer lock until explicit unload. The UI/API
+reports device, dtype, runtime/native context, and live MPS driver allocation
+versus the recommended maximum. Runtime generation is capped at 4,096 tokens;
+the snapshot's native 40,960-token context is not validated by that cap. Qwen
+prompts use its chat template with thinking disabled; generated text contains
+only new tokens.
+
+Trace is a separate opt-in path capped at 128 tokens. It forces eager attention
+and rejects absent or malformed attention, wrong layer/head/sequence shapes,
+non-finite or out-of-range values, non-normalized rows, or future-token
+attention before any visual is drawn. Think shows measured attention to context
+and hidden norms; FFN internals remain explicitly unavailable.
+
+**Verified on this Mac:** Qwen3-1.7B loaded on MPS as BF16 in 3.784 s. MPS
+driver allocation peaked at 4,550,230,016 bytes against a 19,069,665,280-byte
+recommended maximum, then returned to 458,752 bytes after unload; the shared
+MPS lock released. Memory pressure stayed outside warning/critical and swap
+usage did not grow (5,551.38 MiB before load; 5,149.12 MiB after generation and
+trace). A 32-token generation completed in 2.132 s (15.01 tokens/s). Two real
+26-token Think/Neuro traces passed validation: 28 layers, 16 query heads each.
+The Qwen3-4B short-generation retry passed; its Think/Neuro trace path remains
+unvalidated. Qwen3-1.7B is the registered and visually verified model.
+
+**Visual status:** Think's data-backed attention bars render and explicitly
+mark FFN signals unavailable. Neuro draws all 28 layers, but the head-node band
+is dense and hard to read at the current viewport. Plumbing is verified; Neuro
+large-model legibility remains an open visual-design task.
+
 ## HTTP API
 
 All endpoints are on the local server. JSON POST bodies use

@@ -1,5 +1,23 @@
 # llm-lab Roadmap
 
+## Status update (2026-11-16) — read first
+
+### Latest recorded experiment: 160M / 2K-context Pile LR calibration paused at step 6,000
+
+The newest experiment verdict in `experiments.json` is dated **2026-10-17**. The matched frozen-ladder evaluation (640 windows, seed 1234, ctx 2048) found:
+
+- LR `3e-4`: **1.209633 bpb**
+- LR `2e-4`: **1.243623 bpb**
+- Difference: **+0.033991 bpb** for 2e-4 vs 3e-4; 95% CI **+0.0331..+0.0349**
+- Direction favors `3e-4`, but the effect is below the predeclared 0.05 bpb floor. **No winner crowned; verdict remains inconclusive.**
+- Both runs paused at global step **6,000 / 16,000**. Next decision: spend on chunk 2 or proceed with the directional 3e-4 result while preserving uncertainty.
+
+**Current local service state (rechecked 2026-11-16):** Observatory is not running on `127.0.0.1:8787` and no trainer/watchdog process is visible. Qwen3-1.7B snapshot files, including both safetensors shards and its manifest, are present locally; the earlier claim that it was still downloading was stale. A separate guarded Qwen3-4B BF16/MPS retry loaded, generated 8 tokens, and unloaded cleanly: swap growth 0 MiB from a 1,125.25 MiB baseline; memory-pressure free 82% → 48% → 81%; MPS driver peak 8,054,128,640 bytes. This verifies bounded load/generation only, not 4B tracing or sustained use. This says nothing about Ronin's live job state.
+
+**Repo freshness:** local `main` matches `origin/main`; latest commit is `352b7f5` (2026-10-25). The README AUTO:STATE block is stale (generated 2026-10-10). Do not regenerate it from this incomplete local `runs/` mirror: that would erase historical scoreboard evidence. Refresh it only after restoring the canonical run artifacts or making the generator preserve externally verified records. The working tree also has uncommitted Observatory changes across the MPS inference loader, trace validation/UI, and tests; implementation notes are in [`VISUAL-OBSERVATORY.md`](VISUAL-OBSERVATORY.md). These changes are not part of `352b7f5` yet.
+
+**Verification on this Mac (2026-11-16):** `.venv/bin/python -m pytest -q` → **271 passed, 11 failed, 8 skipped**. Ten failures depend on missing local tokenizer/cache/run artifacts in this partial mirror; `test_two_chunks_match_uninterrupted_cpu_run` independently fails because chunked and uninterrupted CPU metrics differ. This is not a clean full-suite pass. Registry check reports missing historical run directories/headers and 5 unregistered local dirs; this mirror is not cleanly auditable.
+
 ## Status update (2026-10-10) — read first; supersedes stale bits below
 
 ### The 160M Pile parity run is OVER and did NOT establish parity (2026-10-10)

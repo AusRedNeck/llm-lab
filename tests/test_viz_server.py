@@ -31,6 +31,11 @@ def test_default_shell_has_two_workspaces():
     assert "Think" in html
     assert "READY" in html
     assert 'id="checkpoint-select"' in html
+    assert 'id="device-select"' in html
+    assert 'option value="mps"' in html
+    app = (Path(__file__).resolve().parents[1] / "viz" / "ui" / "app.js").read_text(encoding="utf-8")
+    assert 'devices.mps_available' in app
+    assert 'device-select").value="mps"' in app
     assert 'id="prompt-input"' in html
     assert 'id="generate-button"' in html
     assert 'id="token-events"' in html
@@ -55,6 +60,15 @@ def test_default_shell_has_two_workspaces():
     assert 'id="neuro-inspect"' in html
     assert 'id="neuro-pause"' in html
     assert 'id="neuro-inspector"' in html
+
+
+def test_neuro_status_refresh_preserves_open_weight_disclosures():
+    from pathlib import Path
+
+    app = (Path(__file__).resolve().parents[1] / "viz" / "ui" / "app.js").read_text(encoding="utf-8")
+    refresh = app.split("async function refreshNeuroStatus()", 1)[1].split("\n}\n", 1)[0]
+    assert 'neuroTrace?.capture_kind.includes("open-weights")' in refresh
+    assert 'FFN somata show as dashed "not exposed"' in refresh
 
 
 def test_dashboard_payload_reuses_run_and_arm_summaries(tmp_path):
