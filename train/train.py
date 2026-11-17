@@ -740,6 +740,7 @@ def _train(args):
     resume_stamp = None
     resume_run_name = None
     resume_eval_bpb = None
+    resume_rng_state = None
     if args.resume:
         r = torch.load(args.resume, map_location=device, weights_only=False)
         validate_schedule_horizon(r.get("schedule_steps"), args.steps)
@@ -772,6 +773,7 @@ def _train(args):
         # checkpoint that carries only best_bpb would let every restart silently reset
         # stall detection, which is exactly the bug class this guard exists to prevent.
         resume_eval_bpb = r.get("eval_bpb")
+        resume_rng_state = r.get("rng_state")
         # Inherit the run identity from the filename stamp and/or the saved run_name.
         _m = re.search(r"_(\d{12})_", os.path.basename(args.resume))
         resume_stamp = _m.group(1) if _m else None
@@ -989,8 +991,11 @@ def _train(args):
     @torch.no_grad()
     def write_samples(step: int):
         # Fixed prompts + fixed seed = comparable across runs and steps.
-        # This is where you HEAR it learning.
+        # Sampling is observational: dropout must not consume the training RNG,
+        # or a chunk checkpoint cannot resume the uninterrupted RNG stream.
         import torch.nn.functional as F_
+        was_training = model.training
+        model.eval()
         prompts = ["Once there was a princess", "Lily played with"]
         lines = [f"--- step {step} ---"]
         for p in prompts:
@@ -1019,6 +1024,7 @@ def _train(args):
         with open(os.path.join(run_path, "samples", f"step{step}.txt"), "w",
                   encoding="utf-8") as f:
             f.write("\n".join(lines))
+        model.train(was_training)
         print(f"  samples -> samples/step{step}.txt")
 
     pos = [0]
@@ -1065,6 +1071,10 @@ def _train(args):
         eval_bpb_history = list(resume_eval_bpb or [])
         print(f"  early-stop ledger inherited: best_bpb={best_bpb:.4f} "
               f"strikes={bad_checks} evals={len(eval_bpb_history)}")
+    # Restore after model/optimizer setup and deterministic diagnostics; checkpoint
+    # RNG must be the next training draw, regardless of process-start setup work.
+    if resume_rng_state is not None:
+        restore_rng_state(torch, resume_rng_state)
 
     # === METRIC 3: Throughput tracking ===
     import time
@@ -1346,7 +1356,13 @@ def _train(args):
                         "eval_bpb": list(eval_bpb_history),
                         "run_name": os.path.basename(run_path)}, ckpt)
             print(f"  saved {ckpt}")
-            write_samples(step)
+            # Samples are observational. Keep their RNG use out of the training
+            # stream so a resumed chunk matches an uninterrupted run.
+            sample_rng_state = capture_rng_state(torch)
+            try:
+                write_samples(step)
+            finally:
+                restore_rng_state(torch, sample_rng_state)
         if stop:
             # Patience spent: the keeper is the best ckpt, not this one.
             log_f.write(json.dumps({"early_stop": True, "step": step,

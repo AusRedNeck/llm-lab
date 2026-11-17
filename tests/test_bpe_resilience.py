@@ -12,6 +12,7 @@ Two properties, both learned the hard way:
 from __future__ import annotations
 
 import os
+import random
 import sys
 
 import pytest
@@ -23,16 +24,45 @@ for path in (ROOT, SCRIPTS):
         sys.path.insert(0, path)
 
 import token_io                                              # noqa: E402
-from model.bpe import BPETokenizer, _SPLIT                    # noqa: E402
+from model.bpe import BPETokenizer, _SPLIT, train_bpe         # noqa: E402
 
-VOCAB = os.path.join(ROOT, "data", "bpe_owt16k.json")
-# Use the combined OWT file (sharded path was deprecated)
-SHARD = os.path.join(ROOT, "data", "openwebtext_combined.txt")
+# The real OWT corpus and 16k tokenizer are large, untracked artifacts. These
+# tests exercise encoder resilience, not corpus statistics, so they build a
+# tiny deterministic tokenizer and source instead of reading data/.
+CORPUS = [
+    "Once there was a princess",
+    "Lily played with the ball",
+    "Once Lily saw the princess",
+    "the ball was big and brave",
+    "A brave bird played with the ball",
+    "the princess and the ball",
+]
 
 
-def sample(chars: int = 200_000) -> str:
-    with open(SHARD, encoding="utf-8", errors="replace") as f:
-        return f.read(chars)
+@pytest.fixture(scope="module")
+def vocab_path(tmp_path_factory):
+    """A real saved+loaded tokenizer, small enough to live under tmp."""
+    tok = train_bpe(CORPUS, num_merges=40)
+    path = tmp_path_factory.mktemp("bpe_resilience") / "tiny_bpe.json"
+    tok.save(str(path))
+    return str(path)
+
+
+def sample(chars: int = 20_000) -> str:
+    """Deterministic pseudo-text: same bytes every run, no corpus on disk."""
+    rng = random.Random(20260918)
+    words = ["the", "princess", "ball", "brave", "bird", "played", "once",
+             "lily", "and", "with", "big", "small", "café", "naïve",
+             "123", "42", "don't", "quoted"]
+    out: list[str] = []
+    n = 0
+    while n < chars:
+        word = rng.choice(words)
+        out.append(word.upper() if rng.random() < 0.15 else word)
+        n += len(word)
+        out.append("\n" if rng.random() < 0.08 else " ")
+        n += 1
+    return "".join(out)[:chars]
 
 
 def pre_fix_encode_seg(tok: BPETokenizer, text: str) -> list[int]:
@@ -53,8 +83,8 @@ def pre_fix_encode_seg(tok: BPETokenizer, text: str) -> list[int]:
     return ids
 
 
-def test_output_identical_to_pre_fix_implementation():
-    tok = BPETokenizer.load(VOCAB)
+def test_output_identical_to_pre_fix_implementation(vocab_path):
+    tok = BPETokenizer.load(vocab_path)
     text = sample()
     assert tok.encode(text) == pre_fix_encode_seg(tok, text), \
         "hardening the sentinel must not change a single token"
@@ -76,24 +106,25 @@ class AlwaysFails(BPETokenizer):
         raise TypeError("this tokenizer can never encode anything")
 
 
-def test_resilient_bisect_keeps_every_byte():
-    tok = SizeLimited.load(VOCAB)
-    text = sample(150_000)
+def test_resilient_bisect_keeps_every_byte(vocab_path, monkeypatch):
+    monkeypatch.setattr(SizeLimited, "limit", 5_000)
+    tok = SizeLimited.load(vocab_path)
+    text = sample(20_000)
     failures: list[int] = []
     ids = token_io.encode_resilient(tok, text, lambda piece, exc: failures.append(len(piece)))
 
     assert failures, "the recovery path must actually fire on this input"
     assert tok.decode(ids) == text, "recovered tokens must decode back to the exact input"
 
-    reference = BPETokenizer.load(VOCAB).encode(text)
+    reference = BPETokenizer.load(vocab_path).encode(text)
     drift = abs(len(ids) - len(reference)) / len(reference)
     assert drift < 0.001, f"seam effects should be negligible, saw {drift:.4%}"
 
 
-def test_resilient_raises_when_nothing_can_be_encoded():
-    tok = AlwaysFails.load(VOCAB)
+def test_resilient_raises_when_nothing_can_be_encoded(vocab_path):
+    tok = AlwaysFails.load(vocab_path)
     with pytest.raises(TypeError):
-        token_io.encode_resilient(tok, sample(10_000), lambda *a: None)
+        token_io.encode_resilient(tok, sample(1_000), lambda *a: None)
 
 
 def test_error_log_files_the_evidence(tmp_path):
@@ -107,13 +138,14 @@ def test_error_log_files_the_evidence(tmp_path):
     assert open(piece, encoding="utf-8").read() == "offending text goes here"
 
 
-def test_encode_file_stream_reports_recovered_failures(tmp_path):
+def test_encode_file_stream_reports_recovered_failures(tmp_path, vocab_path, monkeypatch):
     """The pipeline must surface recoveries rather than hiding them."""
-    tok = SizeLimited.load(VOCAB)
+    monkeypatch.setattr(SizeLimited, "limit", 400)
+    tok = SizeLimited.load(vocab_path)
     src = tmp_path / "in.txt"
-    src.write_text(sample(120_000), encoding="utf-8")
+    src.write_text(sample(3_000), encoding="utf-8")
     out = str(tmp_path / "out.bin")
-    res = token_io.encode_file_stream(str(src), VOCAB, out, chunk_chars=100_000,
+    res = token_io.encode_file_stream(str(src), vocab_path, out, chunk_chars=1_000,
                                       write_sidecar=False, log_every=0, tok=tok)
     assert res["encode_failures"] > 0
     assert os.path.exists(out + ".encode_errors.jsonl")

@@ -22,15 +22,34 @@ import val_fixture  # noqa: E402
 TOKENS = 10_000
 
 
-def _write_cache(tmp_path, name="toy.bin", tokens=TOKENS, meta_tokens=None):
+def _write_encoder(tmp_path):
+    """A real, tiny HF tokenizer standing in for the production encoder.
+
+    The sidecar's `vocab` must point at an encoder that exists in this test's
+    tmp dir. Hardcoding the production path made the suite depend on an asset
+    this checkout does not have (and on a machine that is not this one).
+    """
+    from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+    tok = Tokenizer(models.BPE({"<unk>": 0, "a": 1}, [], unk_token="<unk>"))
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.decoder = decoders.ByteLevel()
+    path = tmp_path / "pythia70m_hf" / "tokenizer.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tok.save(str(path))
+    return str(path)
+
+
+def _write_cache(tmp_path, name="toy.bin", tokens=TOKENS, meta_tokens=None,
+                 ids=None):
     bin_path = tmp_path / name
-    ids = (np.arange(tokens, dtype="<i4") % 50_257) + 1
+    if ids is None:
+        ids = (np.arange(tokens, dtype="<i4") % 50_257) + 1
+    ids = np.asarray(ids, dtype="<i4")
     ids.tofile(str(bin_path))
     meta = {
         "tokens": tokens if meta_tokens is None else meta_tokens,
         "complete": True,
-        "vocab": os.path.join(ROOT, "data", "incoming", "pythia70m_hf",
-                              "tokenizer.json"),
+        "vocab": _write_encoder(tmp_path),
         "src": "toy",
     }
     meta_path = tmp_path / (name + ".meta.json")
@@ -55,7 +74,7 @@ def test_tail_is_exactly_what_split_corpus_holds_out(tmp_path):
     from train.train import split_corpus
     bin_path, _mp, meta = _write_cache(tmp_path)
     arr = np.memmap(bin_path, dtype=val_fixture.DTYPE, mode="r")
-    _train, val = split_corpus(torch.from_numpy(arr), 0.01, ctx=8)
+    _train, val = split_corpus(torch.from_numpy(np.array(arr, copy=True)), 0.01, ctx=8)
     fixture = val_fixture.tail_ids(bin_path, 0.01, meta)
     assert val is not None
     np.testing.assert_array_equal(val.numpy().astype(np.int64), fixture)
@@ -80,13 +99,16 @@ def test_explicit_cache_argument_wins(tmp_path, monkeypatch):
 def test_completed_job_does_not_pin_the_fixture(tmp_path, monkeypatch):
     """A finished run must not choose the fixture the next run scores on."""
     other, _mp, _om = _write_cache(tmp_path, name="old_cache.bin")
+    fallback, _fp, _fm = _write_cache(tmp_path, name="fallback.bin")
     job = tmp_path / "train_job.json"
     job.write_text(json.dumps({
         "completed": True,
         "train_args": ["--tok_cache", other],
     }), encoding="utf-8")
     monkeypatch.setattr(val_fixture, "ACTIVE_JOB", str(job))
+    monkeypatch.setattr(val_fixture, "FALLBACK_CACHE", fallback)
     resolved, _mp2, _meta = val_fixture.resolve()
+    assert resolved == fallback
     assert resolved == val_fixture.FALLBACK_CACHE
     assert resolved != other
 
@@ -106,6 +128,7 @@ def test_running_job_cache_is_used(tmp_path, monkeypatch):
 def test_encoder_comes_from_the_sidecar(tmp_path):
     _bp, _mp, meta = _write_cache(tmp_path)
     enc = val_fixture.encoder_path(meta)
+    assert enc == meta["vocab"]
     assert enc.endswith(os.path.join("pythia70m_hf", "tokenizer.json"))
     # a missing encoder is a hard stop: scoring with the wrong one redefines ids
     with pytest.raises(SystemExit, match="encoder .* not found"):
@@ -129,16 +152,27 @@ def test_reference_tokens_states_the_denominator():
     assert label2 == "step1000"
 
 
-def test_trainer_bpt_matches_the_trainer_recipe():
+def test_trainer_bpt_matches_the_trainer_recipe(tmp_path):
     """bytes/token must be measured, not carried over between tails.
 
-    The 70M trainer recorded 3.9104 for the OLD cache tail; recomputing it with
-    this helper must reproduce that number, which is what proves the recipe is
-    the trainer's and not an approximation of it.
+    Two pins: the helper must reproduce train.val_bytes_per_token exactly on a
+    temporary cache (always), and it must reproduce the 70M trainer's recorded
+    3.9104 for the OLD cache tail when that corpus is present.
     """
+    from train.train import load_tokenizer, val_bytes_per_token
+    # ids drawn from the tiny encoder's vocab: "a" (1 byte) and <unk> (4 bytes)
+    raw = np.array([1, 0] * 2048, dtype="<i4")
+    bin_path, _mp, meta = _write_cache(tmp_path, name="bpt.bin",
+                                       tokens=len(raw), ids=raw)
+    ids = val_fixture.tail_ids(bin_path, 0.01, meta)
+    tok = load_tokenizer(meta["vocab"])
+    expected = val_bytes_per_token(ids, tok)
+    assert expected > 0
+    assert val_fixture.trainer_bpt(ids, meta["vocab"]) == pytest.approx(expected)
+
     old_cache = os.path.join(ROOT, "data", "pile_train_full_bpe_pythia70m.bin")
     if not os.path.exists(old_cache):
-        pytest.skip("old 70M cache not present")
+        return
     meta = json.load(open(old_cache + ".meta.json", encoding="utf-8"))
     ids = val_fixture.tail_ids(old_cache, 0.01, meta)
     bpt = val_fixture.trainer_bpt(ids, val_fixture.encoder_path(meta))

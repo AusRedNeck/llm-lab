@@ -10,7 +10,11 @@ LAB = Path(__file__).resolve().parents[1]
 
 def run_segment(tmp, name, end, start=None):
     out, runs = tmp / f"{name}-ckpt", tmp / f"{name}-runs"
-    cmd = [sys.executable, "-u", "-m", "train.train", "--preset", "t1m",
+    cpu_runner = (
+        "import torch; import train.train as trainer; "
+        "trainer.get_device = lambda: torch.device('cpu'); trainer.main()"
+    )
+    cmd = [sys.executable, "-u", "-c", cpu_runner, "--preset", "t1m",
            "--steps", "4", "--stop-at-step", str(end), "--batch", "1",
            "--accum", "1", "--warmup", "1", "--val_every", "0",
            "--run_dir", str(runs), "--out", str(out)]

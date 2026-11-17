@@ -26,6 +26,18 @@ def test_rng_restore_without_checkpoint_state_is_legacy_noop():
     assert restore_rng_state(torch, None) is False
 
 
+@pytest.mark.skipif(not hasattr(torch.backends, "mps") or not torch.backends.mps.is_available(),
+                    reason="MPS unavailable")
+def test_mps_rng_checkpoint_restores_dropout_stream():
+    torch.mps.manual_seed(1204)
+    saved = capture_rng_state(torch)
+    expected = torch.nn.functional.dropout(torch.ones(64, device="mps"), p=0.5, training=True)
+    restore_rng_state(torch, saved)
+    actual = torch.nn.functional.dropout(torch.ones(64, device="mps"), p=0.5, training=True)
+    assert torch.equal(actual, expected)
+    assert saved.get("mps") is not None
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 def test_cuda_rng_checkpoint_restores_all_device_states():
     torch.cuda.manual_seed_all(91)
